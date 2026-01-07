@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 import random
-
+from typing import Any
 from environment import RunConfig, run_episode
 
 
@@ -15,7 +15,7 @@ def main() -> None:
     save_frames = True
     save_video = True
 
-    def agent(_obs) -> int:
+    def agent(_processed_obs: Any) -> int:
         # FlappyBird action space is effectively Discrete(2): 0=no-op, 1=flap.
         return 1 if (random.random() < p_flap) else 0
 

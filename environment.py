@@ -38,7 +38,7 @@ import flappy_bird_gymnasium  # noqa: F401
 
 
 class Agent(Protocol):
-    def act(self, obs: Any) -> int: ...
+    def act(self, processed_obs: Any) -> int: ...
 
 
 AgentLike = Union[Agent, Callable[[Any], int]]
@@ -55,9 +55,9 @@ class RunConfig:
 
     out_dir: Optional[str] = "runs"  # None = no output
     run_name: Optional[str] = None  # default is timestamp
-    save_run_info: bool = False
-    save_frames: bool = False
-    save_video: bool = False
+    save_run_info: bool = True
+    save_frames: bool = True
+    save_video: bool = True
     video_fps: int = 30
 
 
@@ -90,12 +90,24 @@ def _resolve_run_dir(cfg: RunConfig) -> Optional[Path]:
     run_name = cfg.run_name or _timestamp_run_name()
     return Path(cfg.out_dir).expanduser().resolve() / run_name
 
+def _process_obs(obs: Any) -> Any:
+    nearest_pipe_x = obs[0]
+    nearest_gap_top_y = obs[1]
+    nearest_gap_bottom_y = obs[2]
+    bird_y = obs[9]
+    bird_vel_y = obs[10]
+    gap_middle_y = (nearest_gap_top_y + nearest_gap_bottom_y) / 2
 
-def _agent_action(agent: AgentLike, obs: Any) -> int:
+    dy = (gap_middle_y - bird_y - 0.01) / 0.11
+    dx = (nearest_pipe_x - 0.1) / 0.3
+    return np.array([dy, bird_vel_y, dx])
+
+
+def _agent_action(agent: AgentLike, processed_obs: Any) -> int:
     if hasattr(agent, "act"):
         # mypy/pyright: runtime check
-        return int(getattr(agent, "act")(obs))
-    return int(agent(obs))  # type: ignore[misc]
+        return int(getattr(agent, "act")(processed_obs))
+    return int(agent(processed_obs))  # type: ignore[misc]
 
 
 def _to_jsonable(x: Any) -> Any:
@@ -166,6 +178,7 @@ def run_episode(
 
     t0 = time.time()
     obs, info = env.reset(seed=cfg.seed)
+    processed_obs = _process_obs(obs)
 
     episode_return = 0.0
     episode_length = 0
@@ -200,9 +213,10 @@ def run_episode(
     try:
         step_idx = 0
         while True:
-            action = _agent_action(agent, obs)
+            action = _agent_action(agent, processed_obs)
 
             obs, reward, terminated, truncated, info = env.step(action)
+            processed_obs = _process_obs(obs)
             # info is just dict with score
 
             r = float(reward)
@@ -219,8 +233,7 @@ def run_episode(
                             "terminated": bool(terminated),
                             "truncated": bool(truncated),
                             "score": int(last_score) if last_score is not None else None,
-                            # Full observation + structured state snapshot (when available)
-                            "obs": _to_jsonable(obs),
+                            "processed_obs": _to_jsonable(processed_obs),
                             "info": _to_jsonable(info),
                         },
                     )

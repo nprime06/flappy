@@ -6,23 +6,25 @@ import torch
 import torch.nn as nn
 from torch.optim import Adam
 from environment import run_episode, RunConfig
-
+from tqdm import tqdm
 CONFIG = {
-    "lr": 3e-4,
+    "lr": 1e-3,
     "gamma": 0.99,
     "batch_size": 16,
-    "num_episodes": 100000,
+    "num_episodes": 1000000,
     "checkpoint_path": "reinforce_flappy.pt",
-    "log_interval": 100,
+    "log_interval": 10000,
 }
 
 
 class Policy(nn.Module):
     def __init__(self):
         super().__init__()
-        layers = [nn.Linear(12, 64), nn.ReLU(), 
-                    nn.Linear(64, 64), nn.ReLU(), 
-                    nn.Linear(64, 1), nn.Sigmoid()]
+        layers = [nn.Linear(12, 64), nn.GELU(), 
+                    nn.Linear(64, 128), nn.GELU(), 
+                    nn.Linear(128, 64), nn.GELU(), 
+                    nn.Linear(64, 32), nn.GELU(), 
+                    nn.Linear(32, 1), nn.Sigmoid()]
         self.net = nn.Sequential(*layers)
 
     def forward(self, obs):
@@ -66,7 +68,7 @@ def train():
     running_score = 0.0
     running_length = 0.0
 
-    for ep in range(CONFIG["num_episodes"]):
+    for ep in tqdm(range(CONFIG["num_episodes"])):
         agent = ReinforceAgent(policy)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -127,5 +129,5 @@ def evaluate(checkpoint_path=CONFIG["checkpoint_path"], out_dir="eval_runs"):
 
 
 if __name__ == "__main__":
-    # train()
-    evaluate()
+    train()
+    #evaluate()

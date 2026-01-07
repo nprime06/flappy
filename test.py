@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
+import numpy as np
 import gymnasium as gym
 import flappy_bird_gymnasium  # registers FlappyBird-* env ids with gymnasium
 import random
 import time
-
+import matplotlib.pyplot as plt
 
 def main():
     env_id = "FlappyBird-v0" # FlappyBird-v0 or FlappyBird-rgb-v0
-    interactive = False
+    interactive = True
     p = 0.2  # when interactive=False: probability of taking action=1 (flap)
     seed = 0  # RNG seed for reproducible random policy
     fps = 30
 
     # Headless: render_mode=None means no window / no video subsystem.
     # If you want visuals, switch to render_mode="human" or "rgb_array".
-    render_mode = None
+    render_mode = "human"
     env = gym.make(env_id, render_mode=render_mode, disable_env_checker=True, use_lidar=False)
     rng = random.Random(seed)
 
@@ -34,10 +35,11 @@ def main():
     terminated = False
     truncated = False
 
+    obs_list = []
+
     step = 0
     while running:
         step += 1
-        print(f"Step {step}")
         action = 0  # 0 = do nothing, 1 = flap
 
         if interactive:
@@ -69,6 +71,7 @@ def main():
         # game step
         if not (terminated or truncated):
             obs, reward, terminated, truncated, info = env.step(action)
+            obs_list.append(obs)
         else:
             # headless non-interactive: stop once the episode ends
             if not interactive:
@@ -84,6 +87,34 @@ def main():
             pygame.quit()
         except Exception:
             pass
+    
+    obs_list = np.array(obs_list)   
+
+    steps = np.arange(len(obs_list))
+    nearest_pipe_x = obs_list[:, 0]
+    nearest_gap_top_y = obs_list[:, 1]
+    nearest_gap_bottom_y = obs_list[:, 2]
+    bird_y = obs_list[:, 9]
+    bird_vel_y = obs_list[:, 10]
+
+    gap_middle_y = (nearest_gap_top_y + nearest_gap_bottom_y) / 2
+
+    dy = (gap_middle_y - bird_y - 0.01) / 0.11
+    dx = (nearest_pipe_x - 0.1) / 0.3
+
+
+    plt.plot(steps, dx, label="dx")
+    plt.plot(steps, bird_vel_y, label="bird_vel_y")
+    plt.plot(steps, dy, label="dy")
+    plt.legend()
+    plt.show()
+# 0: nearest pipe x ([-0.2, 0.4])
+# 1: nearest gap top y
+# 2: nearest gap bottom y
+# 9: bird y ([0, 1])
+# 10: bird vel_y ([-0.9, 1])
+# 11: bird rotation (not needed)
+
 
 
 if __name__ == "__main__":
