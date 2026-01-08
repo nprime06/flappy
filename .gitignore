@@ -154,5 +154,5 @@ flappyenv/
 frames/
 *.mp4
 .conda/
-environment.history.yml
-requirements.lock.txt
+*.history.yml
+*.lock.txt
