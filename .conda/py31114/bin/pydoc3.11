@@ -1,0 +1,5 @@
+#!/orcd/home/002/willzhao/flappy/.conda/py31114/bin/python3.11
+
+import pydoc
+if __name__ == '__main__':
+    pydoc.cli()
