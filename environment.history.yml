@@ -1,9 +1,0 @@
-name: /home/willzhao/flappy/.conda/py31114
-channels:
-  - conda-forge
-dependencies:
-  - python=3.11.14
-  - numpy
-  - scipy
-  - pandas
-prefix: /home/willzhao/flappy/.conda/py31114
