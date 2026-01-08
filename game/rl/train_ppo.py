@@ -20,6 +20,7 @@ CONFIG = {
     "log_path": "ppo_training_log.jsonl",
     "value_coef": 0.5,
     "entropy_coef": 0.01,
+    "device": "cuda" if torch.cuda.is_available() else "cpu",
 }
 
 
@@ -39,8 +40,9 @@ class ActorCritic(nn.Module):
 
 
 class PPOAgent:
-    def __init__(self, model):
+    def __init__(self, model, device):
         self.model = model
+        self.device = device
         self.obs_list = []
         self.actions = []
         self.log_probs = []
@@ -48,7 +50,7 @@ class PPOAgent:
 
     def act(self, obs):
         self.obs_list.append(list(obs))
-        obs_t = torch.FloatTensor(obs).unsqueeze(0)
+        obs_t = torch.FloatTensor(obs).unsqueeze(0).to(self.device)
         with torch.no_grad():
             prob, value = self.model(obs_t)
             dist = torch.distributions.Bernoulli(prob)
@@ -75,7 +77,8 @@ def compute_gae(rewards, values, gamma, lam):
 
 
 def train():
-    model = ActorCritic(obs_dim=3)
+    device = torch.device(CONFIG["device"])
+    model = ActorCritic(obs_dim=3).to(device)
     optimizer = Adam(model.parameters(), lr=CONFIG["lr"])
 
     running_score, running_length = 0.0, 0.0
@@ -84,7 +87,7 @@ def train():
     log_file = open(CONFIG["log_path"], "w", buffering=1)
 
     for ep in range(CONFIG["num_episodes"]):
-        agent = PPOAgent(model)
+        agent = PPOAgent(model, device)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = RunConfig(out_dir=tmpdir, run_name="ep", save_run_info=True)
@@ -121,11 +124,11 @@ def train():
         }) + "\n")
 
         if (ep + 1) % CONFIG["batch_size"] == 0:
-            obs_t = torch.FloatTensor(all_obs)
-            actions_t = torch.FloatTensor(all_actions)
-            old_log_probs_t = torch.FloatTensor(all_log_probs)
-            advantages_t = torch.FloatTensor(all_advantages)
-            returns_t = torch.FloatTensor(all_returns)
+            obs_t = torch.FloatTensor(all_obs).to(device)
+            actions_t = torch.FloatTensor(all_actions).to(device)
+            old_log_probs_t = torch.FloatTensor(all_log_probs).to(device)
+            advantages_t = torch.FloatTensor(all_advantages).to(device)
+            returns_t = torch.FloatTensor(all_returns).to(device)
 
             advantages_t = (advantages_t - advantages_t.mean()) / (advantages_t.std() + 1e-8)
 
@@ -167,11 +170,12 @@ def train():
 
 
 def evaluate(checkpoint_path=CONFIG["checkpoint_path"], out_dir="eval_runs"):
-    model = ActorCritic(obs_dim=3)
-    model.load_state_dict(torch.load(checkpoint_path, weights_only=True))
+    device = torch.device(CONFIG["device"])
+    model = ActorCritic(obs_dim=3).to(device)
+    model.load_state_dict(torch.load(checkpoint_path, weights_only=True, map_location=device))
     model.eval()
 
-    agent = PPOAgent(model)
+    agent = PPOAgent(model, device)
     cfg = RunConfig(
         out_dir=out_dir,
         save_run_info=True,
