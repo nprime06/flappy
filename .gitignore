@@ -153,3 +153,4 @@ cython_debug/
 flappyenv/
 frames/
 *.mp4
+.conda/
