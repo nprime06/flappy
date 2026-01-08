@@ -14,7 +14,7 @@ CONFIG = {
     "clip_eps": 0.2,
     "epochs_per_update": 4,
     "batch_size": 16,
-    "num_episodes": 100000,
+    "num_episodes": 10000,
     "checkpoint_path": "ppo_flappy.pt",
     "log_interval": 100,
     "log_path": "ppo_training_log.jsonl",
