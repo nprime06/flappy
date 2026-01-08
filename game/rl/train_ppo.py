@@ -89,10 +89,8 @@ def train():
     log_file = open(CONFIG["log_path"], "w", buffering=1)
 
     for ep in range(CONFIG["num_episodes"]):
-        ep_start_t = time.perf_counter()
         agent = PPOAgent(model, device)
 
-        rollout_start_t = time.perf_counter()
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = RunConfig(out_dir=tmpdir, run_name="ep", save_run_info=True)
             result = run_episode(agent, cfg)
@@ -103,7 +101,6 @@ def train():
                     data = json.loads(line)
                     if "reward" in data:
                         rewards.append(data["reward"])
-        rollout_end_t = time.perf_counter()
 
         advantages, returns = compute_gae(
             rewards, agent.values, CONFIG["gamma"], CONFIG["gae_lambda"]
@@ -119,11 +116,7 @@ def train():
         running_score = alpha * (result.score or 0) + (1 - alpha) * running_score
         running_length = alpha * result.episode_length + (1 - alpha) * running_length
 
-        did_update = (ep + 1) % CONFIG["batch_size"] == 0
-        update_time_s = 0.0
-
-        if did_update:
-            update_start_t = time.perf_counter()
+        if (ep + 1) % CONFIG["batch_size"] == 0:
             obs_t = torch.FloatTensor(all_obs).to(device)
             actions_t = torch.FloatTensor(all_actions).to(device)
             old_log_probs_t = torch.FloatTensor(all_log_probs).to(device)
@@ -153,22 +146,13 @@ def train():
                 optimizer.step()
 
             all_obs, all_actions, all_log_probs, all_advantages, all_returns = [], [], [], [], []
-            update_time_s = time.perf_counter() - update_start_t
 
-        now_t = time.perf_counter()
-        log_file.write(json.dumps({
-            "episode": ep + 1,
-            "score": result.score,
-            "length": result.episode_length,
-            "return": result.episode_return,
-            "avg_score": running_score,
-            "avg_length": running_length,
-            "wall_time_s": now_t - train_start_t,
-            "episode_time_s": now_t - ep_start_t,
-            "rollout_time_s": rollout_end_t - rollout_start_t,
-            "update_time_s": update_time_s,
-            "did_update": did_update,
-        }) + "\n")
+            log_file.write(json.dumps({
+                "episode": ep + 1,
+                "avg_score": running_score,
+                "avg_length": running_length,
+                "wall_time_s": time.perf_counter() - train_start_t,
+            }) + "\n")
 
         if (ep + 1) % CONFIG["log_interval"] == 0:
             print(
