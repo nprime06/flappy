@@ -55,9 +55,9 @@ class RunConfig:
 
     out_dir: Optional[str] = "runs"  # None = no output
     run_name: Optional[str] = None  # default is timestamp
-    save_run_info: bool = True
-    save_frames: bool = True
-    save_video: bool = True
+    save_run_info: bool = False
+    save_frames: bool = False
+    save_video: bool = False
     video_fps: int = 30
 
 

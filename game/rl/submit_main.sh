@@ -33,4 +33,10 @@ if [[ ! -f "$RUN_PATH" ]]; then
   exit 1
 fi
 
-python "$RUN_PATH"
+# Optional: pass --run-dir to resume from existing run
+RUN_DIR="${RUN_DIR:-}"
+if [[ -n "$RUN_DIR" ]]; then
+  python "$RUN_PATH" --run-dir "$RUN_DIR"
+else
+  python "$RUN_PATH"
+fi

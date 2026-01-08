@@ -1,8 +1,11 @@
 """PPO agent for Flappy Bird."""
 
+import argparse
 import json
+import os
 import tempfile
 import time
+from datetime import datetime
 import torch
 import torch.nn as nn
 from torch.optim import Adam
@@ -15,13 +18,12 @@ CONFIG = {
     "clip_eps": 0.2,
     "epochs_per_update": 4,
     "batch_size": 16,
-    "num_episodes": 1000000,
-    "checkpoint_path": "/home/willzhao/flappy/game/rl/ppo_flappy.pt",
-    "log_interval": 10000,
-    "log_path": "/home/willzhao/flappy/game/rl/ppo_training_log.jsonl",
+    "num_episodes": 100,
+    "log_interval": 100,
     "value_coef": 0.5,
     "entropy_coef": 0.01,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
+    "runs_dir": "/home/willzhao/flappy/game/rl/runs",
 }
 
 
@@ -77,18 +79,47 @@ def compute_gae(rewards, values, gamma, lam):
     return advantages, returns
 
 
-def train():
-    train_start_t = time.perf_counter()
+def train(run_dir=None):
     device = torch.device(CONFIG["device"])
     model = ActorCritic(obs_dim=3).to(device)
     optimizer = Adam(model.parameters(), lr=CONFIG["lr"])
 
+    # Setup run directory
+    if run_dir is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_dir = os.path.join(CONFIG["runs_dir"], f"ppo_{timestamp}")
+    os.makedirs(run_dir, exist_ok=True)
+
+    checkpoint_dir = os.path.join(run_dir, "checkpoints")
+    os.makedirs(checkpoint_dir, exist_ok=True)
+
+    log_path = os.path.join(run_dir, "training_log.jsonl")
+    latest_ckpt_path = os.path.join(checkpoint_dir, "latest.pt")
+
+    print(f"Run directory: {run_dir}")
+
+    # Try to resume from checkpoint
+    start_ep = 0
     running_score, running_length = 0.0, 0.0
+    total_wall_time = 0.0
+
+    if os.path.exists(latest_ckpt_path):
+        print(f"Resuming from {latest_ckpt_path}")
+        ckpt = torch.load(latest_ckpt_path, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model"])
+        optimizer.load_state_dict(ckpt["optimizer"])
+        start_ep = ckpt["episode"]
+        running_score = ckpt["running_score"]
+        running_length = ckpt["running_length"]
+        total_wall_time = ckpt["wall_time_s"]
+        print(f"Resumed at episode {start_ep}, avg_score={running_score:.1f}")
+
     all_obs, all_actions, all_log_probs, all_advantages, all_returns = [], [], [], [], []
 
-    log_file = open(CONFIG["log_path"], "w", buffering=1)
+    log_file = open(log_path, "a", buffering=1)
+    train_start_t = time.perf_counter()
 
-    for ep in range(CONFIG["num_episodes"]):
+    for ep in range(start_ep, CONFIG["num_episodes"]):
         agent = PPOAgent(model, device)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -147,32 +178,51 @@ def train():
 
             all_obs, all_actions, all_log_probs, all_advantages, all_returns = [], [], [], [], []
 
+            wall_time_s = total_wall_time + (time.perf_counter() - train_start_t)
+
             log_file.write(json.dumps({
                 "episode": ep + 1,
                 "avg_score": running_score,
                 "avg_length": running_length,
-                "wall_time_s": time.perf_counter() - train_start_t,
+                "wall_time_s": wall_time_s,
             }) + "\n")
 
         if (ep + 1) % CONFIG["log_interval"] == 0:
+            wall_time_s = total_wall_time + (time.perf_counter() - train_start_t)
+
             print(
-                f"Episode {ep+1:4d} | "
+                f"Episode {ep+1:6d} | "
                 f"score={result.score:2d} | "
                 f"len={result.episode_length:3d} | "
                 f"avg_score={running_score:.1f} | "
                 f"avg_len={running_length:.0f}"
             )
 
+            # Save checkpoint
+            ckpt = {
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "episode": ep + 1,
+                "running_score": running_score,
+                "running_length": running_length,
+                "wall_time_s": wall_time_s,
+            }
+            torch.save(ckpt, latest_ckpt_path)
+            torch.save(ckpt, os.path.join(checkpoint_dir, f"ep_{ep+1:07d}.pt"))
+
     log_file.close()
-    torch.save(model.state_dict(), CONFIG["checkpoint_path"])
-    print(f"\nSaved final checkpoint to {CONFIG['checkpoint_path']}")
-    print(f"Training log saved to {CONFIG['log_path']}")
+    print(f"\nTraining complete. Run directory: {run_dir}")
 
 
-def evaluate(checkpoint_path=CONFIG["checkpoint_path"], out_dir="eval_runs"):
+def evaluate(checkpoint_path, out_dir="eval_runs"):
     device = torch.device(CONFIG["device"])
     model = ActorCritic(obs_dim=3).to(device)
-    model.load_state_dict(torch.load(checkpoint_path, weights_only=True, map_location=device))
+
+    ckpt = torch.load(checkpoint_path, weights_only=False, map_location=device)
+    if "model" in ckpt:
+        model.load_state_dict(ckpt["model"])
+    else:
+        model.load_state_dict(ckpt)
     model.eval()
 
     agent = PPOAgent(model, device)
@@ -189,4 +239,8 @@ def evaluate(checkpoint_path=CONFIG["checkpoint_path"], out_dir="eval_runs"):
 
 
 if __name__ == "__main__":
-    train()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--run-dir", type=str, default=None,
+                        help="Run directory to resume from (creates new if not specified)")
+    args = parser.parse_args()
+    train(run_dir=args.run_dir)
