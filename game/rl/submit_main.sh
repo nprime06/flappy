@@ -36,7 +36,22 @@ fi
 # Optional: pass --run-dir to resume from existing run
 RUN_DIR="${RUN_DIR:-}"
 if [[ -n "$RUN_DIR" ]]; then
-  python "$RUN_PATH" --run-dir "$RUN_DIR"
+  python "$RUN_PATH" --run-dir "$RUN_DIR" | tee /tmp/train_output_$$.txt
 else
-  python "$RUN_PATH"
+  python "$RUN_PATH" | tee /tmp/train_output_$$.txt
+fi
+
+# Extract run directory from output and move SLURM logs there
+DETECTED_RUN_DIR=$(grep "^Run directory:" /tmp/train_output_$$.txt | head -1 | cut -d' ' -f3)
+rm -f /tmp/train_output_$$.txt
+
+if [[ -n "$DETECTED_RUN_DIR" && -d "$DETECTED_RUN_DIR" ]]; then
+  SLURM_LOG="/home/willzhao/flappy/game/rl/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.log"
+  SLURM_ERR="/home/willzhao/flappy/game/rl/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.err"
+
+  # Copy logs to run directory (can't move since SLURM still writing)
+  cp "$SLURM_LOG" "$DETECTED_RUN_DIR/slurm.log" 2>/dev/null || true
+  cp "$SLURM_ERR" "$DETECTED_RUN_DIR/slurm.err" 2>/dev/null || true
+
+  echo "Copied SLURM logs to $DETECTED_RUN_DIR"
 fi
