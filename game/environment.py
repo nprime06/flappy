@@ -81,7 +81,7 @@ class RunResult:
 
 
 def _timestamp_run_name() -> str:
-    return time.strftime("%Y%m%d-%H%M%S")
+    return time.strftime("%Y%m%d-%H%M%S") + f"-{int((time.time() % 1) * 1000):03d}"
 
 
 def _resolve_run_dir(cfg: RunConfig) -> Optional[Path]:
