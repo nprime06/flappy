@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from embedding import TimeEmbedding
+from nn.embedding import TimeEmbedding
 from nn.resblock import ResBlock, DownResBlock, UpResBlock
 
 class ResUNet(nn.Module):

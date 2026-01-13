@@ -157,3 +157,5 @@ frames/
 *.history.yml
 *.lock.txt
 vod/
+trained_model/
+runs/
