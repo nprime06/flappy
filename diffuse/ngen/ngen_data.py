@@ -60,10 +60,12 @@ class TraceDataset(Dataset):
 if __name__ == "__main__":
     dataset = TraceDataset("/Users/william/Desktop/Random/flappy/vod")
     print(f"Dataset size: {len(dataset)}")
-    past, current, action = next(iter(DataLoader(dataset, batch_size=4, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)))
+    past, current, action = next(iter(DataLoader(dataset, batch_size=32, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)))
     print(f"Past shape: {past.shape}")
     print(f"Current shape: {current.shape}")
     print(f"Action shape: {action.shape}")
     print(f"Value range: [{past.min():.2f}, {past.max():.2f}]")
     print(f"Value range: [{current.min():.2f}, {current.max():.2f}]")
     print(f"Value range: [{action.min():.2f}, {action.max():.2f}]")
+
+    print(f"Values: ", action)

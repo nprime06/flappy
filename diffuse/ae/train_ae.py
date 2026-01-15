@@ -28,7 +28,7 @@ model_config = {
 train_config = {
     "lr": 1e-4,
     "num_epochs": 100,
-    "batch_size": 8,
+    "batch_size": 256,
     "kl_weight": 1e-6,
     "grad_weight": 1.0,
     "log_interval": 1,
@@ -132,8 +132,13 @@ def train(run_dir=None):
             z, mean, logvar = model.reparameterize(encoded, sample=True)
             recon = model.decoder(z)
 
-            l1_loss = F.l1_loss(recon, batch)
-            grad_loss = gradient_loss(recon, batch)
+            # Downsample target if decoder outputs lower resolution
+            target = batch
+            if recon.shape[-2:] != batch.shape[-2:]:
+                target = F.interpolate(batch, size=recon.shape[-2:], mode='area')
+
+            l1_loss = F.l1_loss(recon, target)
+            grad_loss = gradient_loss(recon, target)
             kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
             loss = l1_loss + train_config["grad_weight"] * grad_loss + train_config["kl_weight"] * kl_loss
 

@@ -28,7 +28,7 @@ class FramesDataset(Dataset):
 
 if __name__ == "__main__":
     # Quick test
-    loader = DataLoader(VodFrameDataset("/Users/william/Desktop/Random/flappy/vod"), batch_size=4, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
+    loader = DataLoader(FramesDataset("/Users/william/Desktop/Random/flappy/vod"), batch_size=4, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
     batch = next(iter(loader))
     print(f"Batch shape: {batch.shape}")  # [4, 3, 512, 288]
     print(f"Value range: [{batch.min():.2f}, {batch.max():.2f}]")

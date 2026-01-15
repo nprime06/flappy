@@ -1,8 +1,10 @@
 import os
+import sys
 import random
 import torch
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from environment import run_episode, RunConfig
-from train_ppo import ActorCritic, PPOAgent
+from rl.train_ppo import ActorCritic, PPOAgent
 from tqdm import tqdm
 
 RUN_ID = "20260108_034928"
@@ -34,6 +36,7 @@ class HijackedPPOAgent(PPOAgent):
             if random.random() < self.p_freeze:
                 a = 0
 
+        # print(f"prob={prob.item():.4f}, action={a}")
         return a
 
 
