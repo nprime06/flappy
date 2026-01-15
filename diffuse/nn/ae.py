@@ -33,14 +33,25 @@ class Decoder(nn.Module):
         for up_block in self.up_blocks:
             x = up_block(x, skip=None, t_emb=None, c_emb=None)
         x = self.out_block(x)
-        return x
+        return torch.tanh(x)
 
 
 class VAE(nn.Module):
-    def __init__(self, image_channels, hidden_channels, latent_channels, num_layers):
+    def __init__(
+        self,
+        image_channels,
+        hidden_channels,
+        latent_channels,
+        num_layers,
+        decoder_hidden_channels=None,
+        decoder_num_layers=None,
+    ):
         super().__init__()
+        dec_hidden = decoder_hidden_channels if decoder_hidden_channels is not None else hidden_channels
+        dec_layers = decoder_num_layers if decoder_num_layers is not None else num_layers
+
         self.encoder = Encoder(image_channels, hidden_channels, latent_channels, num_layers)
-        self.decoder = Decoder(latent_channels, hidden_channels, image_channels, num_layers)
+        self.decoder = Decoder(latent_channels, dec_hidden, image_channels, dec_layers)
 
     def reparameterize(self, encoded, sample=True): # encoded: (B, 2*latent_channels, H', W')
         mean, logvar = encoded.chunk(2, dim=1)
@@ -48,6 +59,7 @@ class VAE(nn.Module):
             logvar = torch.clamp(logvar, min=-30, max=20)
             std = torch.exp(0.5 * logvar)
             eps = torch.randn_like(std)
-            return mean + eps * std
+            z = mean + eps * std
+            return z, mean, logvar
         else:
-            return mean
+            return mean, mean, logvar

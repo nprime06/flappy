@@ -7,16 +7,15 @@ import time
 import matplotlib.pyplot as plt
 
 def main():
-    env_id = "FlappyBird-v0" # FlappyBird-v0 or FlappyBird-rgb-v0
+    env_id = "FlappyBird-v0"
     interactive = True
     p = 0.2  # when interactive=False: probability of taking action=1 (flap)
     seed = 0  # RNG seed for reproducible random policy
     fps = 30
 
-    # Headless: render_mode=None means no window / no video subsystem.
-    # If you want visuals, switch to render_mode="human" or "rgb_array".
-    render_mode = "human"
-    env = gym.make(env_id, render_mode=render_mode, disable_env_checker=True, use_lidar=False)
+    
+    render_mode = "human" # headless (none), human, rgb_array
+    env = gym.make(env_id, screen_size=(576, 1024), render_mode=render_mode, disable_env_checker=True, use_lidar=False)
     rng = random.Random(seed)
 
     obs, info = env.reset()

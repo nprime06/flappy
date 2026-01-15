@@ -7,7 +7,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
 
-class VodFrameDataset(Dataset):
+class FramesDataset(Dataset):
     """Dataset that samples random frames from all vod recordings."""
 
     def __init__(self, vod_dir):
