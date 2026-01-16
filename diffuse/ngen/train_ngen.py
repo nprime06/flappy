@@ -25,19 +25,19 @@ model_config = {
     "num_layers": 2,            # limited by odd latent width (18)
     "embed_dim": 128,
     "num_classes": 2,           # flappy bird: 0=no-flap, 1=flap
-    "context_frames": 4,        # k past frames
+    "context_frames": 2,        # k past frames
     "num_aug_bins": 16,
 }
 
 train_config = {
     "lr": 1e-4,
-    "num_epochs": 100,
+    "num_epochs": 5,
     "batch_size": 32,
     "max_aug_std": 0.5,
     "latent_mean": 10.1880,
     "latent_std": 13.3726,
     "log_interval": 1,
-    "checkpoint_interval": 10,
+    "checkpoint_interval": 1,
     "num_workers": 4,
     "reflow_steps": 50,         # Euler steps for reflow pair generation
     "vae_checkpoint": "/home/willzhao/flappy/diffuse/ae/runs/vae_20260115_022006/checkpoints/latest.pt",
@@ -219,10 +219,9 @@ def train(run_dir=None, reflow_checkpoint=None):
 
             # Get z_0 (either from N(0,1) or from reflow generator)
             if reflow_generator is not None:
-                # Reflow: generate (z_0, z_1) pairs using pre-trained model
-                z_0, z_1 = reflow_generator.generate(z_target.shape, z_cond, action, aug_level)
-                # Use generated z_1 as target instead of real data
-                z_target = z_1
+                # Reflow: infer z_0 from real z_target by flowing backward
+                z_0 = reflow_generator.generate(z_target, z_cond, action, aug_level)
+                # z_target stays as real data
             else:
                 z_0 = None  # Will sample from N(0,1) in loss function
 

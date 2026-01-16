@@ -10,6 +10,16 @@
 #SBATCH --output="/home/willzhao/flappy/diffuse/ngen/%x-%j.log"
 #SBATCH --error="/home/willzhao/flappy/diffuse/ngen/%x-%j.err"
 
+# USAGE: 
+# Standard flow matching:
+# sbatch submit_ngen.sh
+
+# Resume training:
+# RUN_DIR=/home/willzhao/flappy/diffuse/ngen/runs/ngen_xxx sbatch submit_ngen.sh
+
+# Reflow (rectified flow) training:
+# REFLOW=/home/willzhao/flappy/diffuse/ngen/runs/ngen_xxx/checkpoints/latest.pt sbatch submit_ngen.sh
+
 set -euo pipefail
 
 cd /home/willzhao/flappy

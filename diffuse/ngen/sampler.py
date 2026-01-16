@@ -6,7 +6,7 @@ import torch
 @torch.no_grad()
 def euler_sample(model, z_0, z_cond, action, aug_level, num_steps=50):
     """
-    Sample from flow model using Euler ODE solver.
+    Sample from flow model using Euler ODE solver (forward: t=0 → t=1).
 
     Integrates: dz/dt = v(z, t) from t=0 to t=1
 
@@ -19,7 +19,7 @@ def euler_sample(model, z_0, z_cond, action, aug_level, num_steps=50):
         num_steps: Number of Euler steps
 
     Returns:
-        z_1: Final sample (B, C, H, W)
+        z_1: Final sample at t=1 (B, C, H, W)
     """
     B = z_0.shape[0]
     device = z_0.device
@@ -35,65 +35,79 @@ def euler_sample(model, z_0, z_cond, action, aug_level, num_steps=50):
 
 
 @torch.no_grad()
-def generate_reflow_pairs(model, z_target_shape, z_cond, action, aug_level, num_steps=50):
+def euler_sample_backward(model, z_1, z_cond, action, aug_level, num_steps=50):
     """
-    Generate (z_0, z_1) pairs for rectified flow reflow training.
+    Infer z_0 from z_1 by integrating ODE backward (t=1 → t=0).
 
-    In reflow:
-    1. Sample z_0 ~ N(0,1)
-    2. Flow forward using the trained model to get z_1
-    3. Use (z_0, z_1) as training pairs for the next model
-
-    This "straightens" the learned flow paths, enabling fewer sampling steps.
+    Used for reflow: given real data z_1, find the noise z_0 that maps to it.
 
     Args:
-        model: Pre-trained flow model
-        z_target_shape: Shape of latents (B, C, H, W)
+        model: Flow model predicting velocity
+        z_1: Data point at t=1 (B, C, H, W)
         z_cond: Conditioning latents (B, k*C, H, W)
         action: Action indices (B,)
         aug_level: Augmentation level indices (B,)
-        num_steps: Number of Euler steps for generation
+        num_steps: Number of Euler steps
 
     Returns:
-        z_0: Starting noise (B, C, H, W)
-        z_1: Generated endpoints (B, C, H, W)
+        z_0: Inferred noise at t=0 (B, C, H, W)
     """
-    device = z_cond.device
+    B = z_1.shape[0]
+    device = z_1.device
+    dt = 1.0 / num_steps
 
-    # Sample starting noise
-    z_0 = torch.randn(z_target_shape, device=device)
+    z = z_1
+    for i in range(num_steps):
+        t = torch.full((B,), 1.0 - i * dt, device=device)
+        v = model(z, t, c=action, z_cond=z_cond, aug_level=aug_level)
+        z = z - v * dt  # subtract (backward direction)
 
-    # Flow forward to generate z_1
-    z_1 = euler_sample(model, z_0, z_cond, action, aug_level, num_steps=num_steps)
-
-    return z_0, z_1
+    return z
 
 
 class ReflowPairGenerator:
     """
-    Wrapper for generating reflow pairs during training.
+    Generate z_0 for reflow training by flowing backward from real data.
+
+    In reflow:
+    1. z_1 = real data (from dataset)
+    2. z_0 = flow_backward(z_1) using pre-trained model
+    3. Train new model on (z_0, z_1) pairs
+
+    This keeps z_1 grounded in real data while straightening the flow paths.
 
     Usage:
         generator = ReflowPairGenerator(pretrained_model, num_steps=50)
 
         # In training loop:
-        z_0, z_1 = generator.generate(z_target_shape, z_cond, action, aug_level)
-        loss = flow_matching_loss(model, z_1, z_cond, action, aug_level, z_0=z_0)
+        z_0 = generator.generate(z_target, z_cond, action, aug_level)
+        loss = flow_matching_loss(model, z_target, z_cond, action, aug_level, z_0=z_0)
     """
 
     def __init__(self, model, num_steps=50):
         """
         Args:
-            model: Pre-trained flow model for generating pairs
-            num_steps: Number of Euler steps
+            model: Pre-trained flow model for inferring z_0
+            num_steps: Number of Euler steps for backward integration
         """
         self.model = model
         self.num_steps = num_steps
         self.model.eval()
 
-    def generate(self, z_target_shape, z_cond, action, aug_level):
-        """Generate (z_0, z_1) reflow pairs."""
-        return generate_reflow_pairs(
-            self.model, z_target_shape, z_cond, action, aug_level,
+    def generate(self, z_1, z_cond, action, aug_level):
+        """
+        Infer z_0 from real data z_1 by flowing backward.
+
+        Args:
+            z_1: Real data latent (B, C, H, W)
+            z_cond: Conditioning latents (B, k*C, H, W)
+            action: Action indices (B,)
+            aug_level: Augmentation level indices (B,)
+
+        Returns:
+            z_0: Inferred noise (B, C, H, W)
+        """
+        return euler_sample_backward(
+            self.model, z_1, z_cond, action, aug_level,
             num_steps=self.num_steps
         )
