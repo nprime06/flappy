@@ -6,7 +6,7 @@
 #SBATCH -c 8
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:h200:1
-#SBATCH -t 12:00:00
+#SBATCH -t 9:00:00
 #SBATCH --output="/home/willzhao/flappy/diffuse/ngen/%x-%j.log"
 #SBATCH --error="/home/willzhao/flappy/diffuse/ngen/%x-%j.err"
 
