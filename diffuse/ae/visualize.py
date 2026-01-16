@@ -1,13 +1,20 @@
 """Visualization utilities for autoencoder development."""
 
+import os
+import sys
 import random
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from PIL import Image
 from torchvision import transforms
+import imageio
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from nn.ae import VAE
 
 
 def load_random_frame(vod_dir):
@@ -57,6 +64,94 @@ def visualize_downsample(vod_dir, scale_factor=0.5, modes=("area", "bilinear")):
     plt.show()
 
 
+def visualize_reconstruction(checkpoint_path, vod_dir, output_path="reconstruction.gif",
+                              num_frames=30, fps=30, device="cpu"):
+    """Load a VAE checkpoint, encode/decode contiguous frames, and create side-by-side GIF."""
+    # Load checkpoint
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+
+    # Get model config from checkpoint or use defaults
+    config = ckpt.get("model_config", {})
+    model = VAE(
+        image_channels=config.get("image_channels", 3),
+        hidden_channels=config.get("hidden_channels", 16),
+        latent_channels=config.get("latent_channels", 4),
+        num_layers=config.get("num_layers", 4),
+        decoder_hidden_channels=config.get("decoder_hidden_channels"),
+        decoder_num_layers=config.get("decoder_num_layers"),
+    ).to(device)
+    model.load_state_dict(ckpt["model"])
+    model.eval()
+
+    print(f"Loaded checkpoint: {checkpoint_path}")
+    print(f"Epoch: {ckpt.get('epoch', 'unknown')}")
+
+    # Find all episode directories and pick a random one
+    episode_dirs = sorted(Path(vod_dir).glob("*/*/frames"))
+    episode_dir = random.choice(episode_dirs)
+    frame_paths = sorted(episode_dir.glob("*.png"))
+
+    # Pick a random starting point that allows num_frames contiguous frames
+    max_start = max(0, len(frame_paths) - num_frames)
+    start_idx = random.randint(0, max_start)
+    frame_paths = frame_paths[start_idx:start_idx + num_frames]
+
+    print(f"Episode: {episode_dir}")
+    print(f"Frames {start_idx} to {start_idx + len(frame_paths) - 1}")
+
+    # Load frames as batch
+    frames = []
+    for path in frame_paths:
+        img = Image.open(path).convert("RGB")
+        tensor = transforms.ToTensor()(img) * 2 - 1  # [-1, 1]
+        frames.append(tensor)
+    batch = torch.stack(frames).to(device)
+
+    # Encode and decode
+    with torch.no_grad():
+        encoded = model.encoder(batch)
+        z, mean, logvar = model.reparameterize(encoded, sample=False)
+        recon = model.decoder(z).cpu()
+
+    # If reconstruction is different resolution, upsample for display
+    if recon.shape[-2:] != batch.shape[-2:]:
+        recon = F.interpolate(recon, size=batch.shape[-2:], mode='bilinear', align_corners=False)
+
+    batch = batch.cpu()
+
+    # Compute average L1
+    l1 = F.l1_loss(recon, batch).item()
+    print(f"Average L1: {l1:.4f}")
+
+    # Create side-by-side frames for GIF
+    gif_frames = []
+    for i in range(len(frames)):
+        orig = tensor_to_display(batch[i])
+        rec = tensor_to_display(recon[i])
+
+        # Concatenate side by side
+        combined = np.concatenate([orig, rec], axis=1)
+        # Convert to uint8
+        combined = (combined * 255).astype(np.uint8)
+        gif_frames.append(combined)
+
+    # Save GIF
+    imageio.mimsave(output_path, gif_frames, fps=fps)
+    print(f"Saved GIF to: {output_path}")
+
+    # Also show first frame comparison
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+    axes[0].imshow(tensor_to_display(batch[0]))
+    axes[0].set_title("Original")
+    axes[0].axis("off")
+    axes[1].imshow(tensor_to_display(recon[0]))
+    axes[1].set_title(f"Reconstruction (L1: {l1:.4f})")
+    axes[1].axis("off")
+    plt.tight_layout()
+    plt.show()
+
+
 if __name__ == "__main__":
     vod_dir = "/Users/william/Desktop/Random/flappy/vod"
-    visualize_downsample(vod_dir, scale_factor=0.5)
+    checkpoint = "/Users/william/Desktop/Random/flappy/diffuse/ae/runs/vae_20260115_022006/checkpoints/latest.pt"
+    visualize_reconstruction(checkpoint, vod_dir, output_path="reconstruction.gif", num_frames=90)

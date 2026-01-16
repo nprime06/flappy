@@ -27,12 +27,13 @@ model_config = {
 
 train_config = {
     "lr": 1e-4,
-    "num_epochs": 100,
+    "num_epochs": 200,
     "batch_size": 256,
     "kl_weight": 1e-6,
     "grad_weight": 1.0,
+    "bird_weight": 10.0,  # extra weight for bird pixels
     "log_interval": 1,
-    "checkpoint_interval": 50,
+    "checkpoint_interval": 10,
     "num_workers": 4,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
     # "data_dir": "/Users/william/Desktop/Random/flappy/vod",
@@ -51,6 +52,49 @@ def gradient_loss(recon, target):
     recon_dy = recon[:, :, 1:, :] - recon[:, :, :-1, :]
     target_dy = target[:, :, 1:, :] - target[:, :, :-1, :]
     return F.l1_loss(recon_dx, target_dx) + F.l1_loss(recon_dy, target_dy)
+
+
+def get_bird_weight_mask(target, bird_weight=10.0, bird_x_min=50, bird_x_max=100, bird_height=35):
+    """Create weight mask with higher weight in bird bounding box.
+
+    The bird has a fixed x position (world scrolls past it), so we only
+    detect the top edge (y_min) and use fixed x bounds and height.
+
+    Args:
+        target: tensor in [-1, 1], shape (B, 3, H, W)
+        bird_weight: weight multiplier for bird region
+        bird_x_min, bird_x_max: fixed horizontal bounds
+        bird_height: fixed height of bounding box
+
+    Returns:
+        weight mask shape (B, 1, H, W)
+    """
+    # Convert to [0, 1] for color detection
+    img = (target + 1) / 2
+    r, g, b = img[:, 0], img[:, 1], img[:, 2]
+
+    # Detect orange bird body
+    bird_mask = (r > 0.8) & (g > 0.3) & (g < 0.6) & (b < 0.3)
+
+    B, _, H, W = target.shape
+    weights = torch.ones(B, 1, H, W, device=target.device)
+
+    for i in range(B):
+        mask_i = bird_mask[i]
+        if mask_i.any():
+            # Find top edge of bird (offset by 23 to capture white head above orange)
+            rows = mask_i.any(dim=1).nonzero(as_tuple=True)[0]
+            y_min = max(0, rows.min().item() - 23)
+            y_max = min(H - 1, y_min + bird_height)
+
+            weights[i, 0, y_min:y_max+1, bird_x_min:bird_x_max+1] = bird_weight
+
+    return weights
+
+
+def weighted_l1_loss(recon, target, weights):
+    """L1 loss with per-pixel weights."""
+    return (weights * (recon - target).abs()).mean()
 
 
 def train(run_dir=None):
@@ -137,7 +181,9 @@ def train(run_dir=None):
             if recon.shape[-2:] != batch.shape[-2:]:
                 target = F.interpolate(batch, size=recon.shape[-2:], mode='area')
 
-            l1_loss = F.l1_loss(recon, target)
+            # Weighted L1 loss: higher weight on bird region
+            bird_weights = get_bird_weight_mask(target, bird_weight=train_config["bird_weight"])
+            l1_loss = weighted_l1_loss(recon, target, bird_weights)
             grad_loss = gradient_loss(recon, target)
             kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
             loss = l1_loss + train_config["grad_weight"] * grad_loss + train_config["kl_weight"] * kl_loss
@@ -183,7 +229,8 @@ def train(run_dir=None):
                 "optimizer": optimizer.state_dict(),
                 "epoch": epoch + 1,
                 "wall_time_s": wall_time_s,
-                "config": train_config,
+                "model_config": model_config,
+                "train_config": train_config,
             }
             torch.save(ckpt, latest_ckpt_path)
             torch.save(ckpt, os.path.join(checkpoint_dir, f"ep_{epoch+1:05d}.pt"))

@@ -53,7 +53,7 @@ class VAE(nn.Module):
         self.encoder = Encoder(image_channels, hidden_channels, latent_channels, num_layers)
         self.decoder = Decoder(latent_channels, dec_hidden, image_channels, dec_layers)
 
-    def reparameterize(self, encoded, sample=True): # encoded: (B, 2*latent_channels, H', W')
+    def reparameterize(self, encoded, sample=False): # encoded: (B, 2*latent_channels, H', W')
         mean, logvar = encoded.chunk(2, dim=1)
         if sample:
             logvar = torch.clamp(logvar, min=-30, max=20)
