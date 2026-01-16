@@ -45,8 +45,8 @@ def flow_matching_loss(model, z_target, z_cond, action, aug_level, z_0=None):
     loss = F.mse_loss(v_pred, v_target)
 
     info = {
-        "v_pred_norm": v_pred.detach().norm(dim=(1, 2, 3)).mean().item(),
-        "v_target_norm": v_target.detach().norm(dim=(1, 2, 3)).mean().item(),
+        "v_pred_norm": v_pred.detach().flatten(1).norm(dim=1).mean().item(),
+        "v_target_norm": v_target.detach().flatten(1).norm(dim=1).mean().item(),
     }
 
     return loss, info
