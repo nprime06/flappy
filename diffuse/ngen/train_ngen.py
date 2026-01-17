@@ -31,13 +31,13 @@ model_config = {
 
 train_config = {
     "lr": 1e-4,
-    "num_epochs": 5,
+    "num_epochs": 20,
     "batch_size": 512,
     "max_aug_std": 0.5,
     "latent_mean": 10.1880,
     "latent_std": 13.3726,
     "log_interval": 1,
-    "checkpoint_interval": 1,
+    "checkpoint_interval": 5,
     "num_workers": 4,
     "reflow_steps": 50,         # Euler steps for reflow pair generation
     "vae_checkpoint": "/home/willzhao/flappy/diffuse/ae/runs/vae_20260115_022006/checkpoints/latest.pt",

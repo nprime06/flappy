@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from nn.resblock import ResBlock, DownResBlock, UpResBlock
+from .resblock import ResBlock, DownResBlock, UpResBlock
 
 class Encoder(nn.Module):
     def __init__(self, image_channels, hidden_channels, latent_channels, num_layers):
