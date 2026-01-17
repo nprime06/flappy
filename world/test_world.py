@@ -80,6 +80,7 @@ def load_initial_frames(vod_dir, k, device):
     for f in frame_files:
         img = Image.open(f).convert("RGB")
         img_tensor = torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 255.0
+        img_tensor = img_tensor * 2 - 1
         frames.append(img_tensor)
 
     # Stack: past k frames and current frame
@@ -107,6 +108,7 @@ def latent_to_image(vae, z, latent_mean, latent_std):
     """Convert latent to displayable image."""
     with torch.no_grad():
         x = vae_decode(vae, z, latent_mean, latent_std)
+        x = (x + 1) / 2
         x = x.clamp(0, 1)
         x = (x[0].permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8)
     return x
