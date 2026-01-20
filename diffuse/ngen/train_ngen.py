@@ -67,7 +67,7 @@ model_config = {
 train_config = {
     "lr": 1e-4,
     "num_epochs": 40,
-    "batch_size": 512,
+    "batch_size": 256,
     "max_aug_std": 0.5,
     "latent_mean": 10.1880,
     "latent_std": 13.3726,
