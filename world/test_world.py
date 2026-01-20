@@ -14,7 +14,7 @@ from PIL import Image
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from diffuse.nn.ae import VAE
 from diffuse.nn.resunet import ResUNet
-from diffuse.ngen.sampler import euler_sample
+from diffuse.ngen.sampler import euler_sample, euler_sample_cfg
 
 
 def load_vae(checkpoint_path, device):
@@ -122,10 +122,22 @@ def main():
                         help="Path to VAE checkpoint (reads from ngen config if not specified)")
     parser.add_argument("--vod-dir", type=str, default=None,
                         help="Path to vod directory for initial frames")
-    parser.add_argument("--num-steps", type=int, default=20,
-                        help="Number of Euler steps for sampling (fewer = faster)")
+    parser.add_argument("--num-steps", type=int, default=50,
+                        help="Number of Euler steps for sampling (match training)")
     parser.add_argument("--scale", type=int, default=2,
                         help="Display scale factor")
+    parser.add_argument("--noise-scale", type=float, default=0.1,
+                        help="Scale of noise perturbation for z_0 (0 = pure noise, small = perturbation)")
+    parser.add_argument("--aug-level", type=int, default=8,
+                        help="Augmentation level at inference (0-15, 8 = median)")
+    parser.add_argument("--smoothing", type=float, default=0.0,
+                        help="Temporal smoothing factor (0 = none, >0 blends with previous)")
+    parser.add_argument("--done-threshold", type=float, default=0.5,
+                        help="Threshold for done prediction to end game")
+    parser.add_argument("--use-cfg", action="store_true",
+                        help="Use classifier-free guidance during sampling")
+    parser.add_argument("--cfg-scale", type=float, default=1.5,
+                        help="CFG scale (only used with --use-cfg)")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -207,8 +219,8 @@ def main():
     # Current latent (the frame we display)
     z_display = z_current
 
-    # aug_level = 0 at inference (no noise augmentation)
-    aug_level = torch.zeros(1, dtype=torch.long, device=device)
+    # aug_level: use median level at inference for stability
+    aug_level = torch.full((1,), args.aug_level, dtype=torch.long, device=device)
 
     running = True
     frame_count = 0
@@ -242,11 +254,38 @@ def main():
 
         # Sample next frame using flow model
         with torch.no_grad():
-            z_0 = torch.randn_like(z_display)  # starting noise
-            z_next = euler_sample(
-                flow_model, z_0, z_cond, action_tensor, aug_level,
-                num_steps=args.num_steps
-            )
+            # Use perturbation from current frame instead of pure noise
+            if args.noise_scale > 0:
+                z_0 = z_display + args.noise_scale * torch.randn_like(z_display)
+            else:
+                z_0 = torch.randn_like(z_display)
+
+            # Use CFG if enabled
+            if args.use_cfg:
+                z_next = euler_sample_cfg(
+                    flow_model, z_0, z_cond, action_tensor, aug_level,
+                    cfg_scale=args.cfg_scale, num_steps=args.num_steps
+                )
+            else:
+                z_next = euler_sample(
+                    flow_model, z_0, z_cond, action_tensor, aug_level,
+                    num_steps=args.num_steps
+                )
+
+            # Apply temporal smoothing if enabled
+            if args.smoothing > 0:
+                z_next = (1 - args.smoothing) * z_next + args.smoothing * z_display
+
+            # Check done prediction if model has done head
+            if hasattr(flow_model, 'use_done_head') and flow_model.use_done_head:
+                t_final = torch.ones(1, device=device)
+                _, done_logit = flow_model(z_next, t_final, c=action_tensor, z_cond=z_cond,
+                                           aug_level=aug_level, return_done=True)
+                done_prob = torch.sigmoid(done_logit).item()
+                if done_prob > args.done_threshold:
+                    print(f"Game Over! (done_prob={done_prob:.2f})")
+                    # Could break here or reset to new episode
+                    # For now, just print and continue
 
         # Update frame buffer (shift left, add new)
         frame_buffer.pop(0)

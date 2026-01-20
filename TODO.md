@@ -1,5 +1,9 @@
 # Flappy Bird World Model - Implementation Review vs GameNGen
 
+## IMPORTANT INSTRUCTIONS - KEEP IN CONTEXT
+
+For now we are ONLY working on the diffuse/ directory and the models inside it. We can propose changes to game/ and vod/ (data collection) later. 
+
 ## Executive Summary
 
 Your implementation has a solid foundation with correctly implemented flow matching, noise augmentation, and reflow mechanisms. However, there are significant issues spanning **mathematical bugs**, **data pipeline problems**, **inference instability**, and **GameNGen mismatches**. The most critical are:
@@ -46,31 +50,6 @@ start_step = k  # Always require k prior frames from SAME episode
 
 This wastes k frames per episode but ensures physical causality.
 
----
-
-## 0.2 Behavioral Augmentation Completely Disabled (CRITICAL)
-
-**File**: `vod/record.py:12-13`
-```python
-p_stim = 0.0      # Force-flap probability - DISABLED
-p_freeze = 0.0    # Force-no-flap probability - DISABLED
-```
-
-**The Problem**: ALL 1000 episodes follow the exact same trained PPO policy with NO behavioral diversity.
-
-**Consequences**:
-- Action distribution: 94.6% no-flap, 5.4% flap (heavily skewed)
-- Model only sees states reachable by the single policy
-- Major blind spots: aggressive flapping, extreme velocities, unusual collision avoidance
-- World model will fail on out-of-distribution player behaviors
-
-**Fix**: Enable augmentation for data diversity:
-```python
-p_stim = 0.05    # 5% chance to force flap when policy says no
-p_freeze = 0.15  # 15% chance to force no-flap when policy says yes
-```
-
-Then recollect data with these settings.
 
 ---
 
@@ -177,31 +156,6 @@ aug_level = torch.full((1,), 8, dtype=torch.long, device=device)  # Median
 
 ---
 
-## 0.7 No Temporal Consistency Mechanisms (HIGH)
-
-**The Problem**: The model has NO explicit mechanisms to enforce:
-- Temporal smoothness between consecutive frames
-- Physics consistency (gravity, impulse)
-- Valid state transitions
-
-It relies entirely on:
-- Implicit learning from VOD data
-- Context conditioning (only 2 frames)
-- VAE's learned manifold
-
-**Failure Modes**:
-- Bird can teleport, flicker, or vanish
-- Physics violations (impossible jumps)
-- Errors compound over long generation
-
-**Mitigation** (without retraining):
-```python
-# Temporal smoothing on generated latents
-z_next_smoothed = 0.8 * z_next + 0.2 * z_display
-```
-
----
-
 # PART 1: CONCEPTUAL & MATHEMATICAL ISSUES
 
 These are fundamental correctness problems independent of GameNGen comparison.
@@ -268,27 +222,6 @@ This creates a train-test distribution shift. The model learned velocity fields 
 
 ---
 
-## 3. VAE Sampling Mode Mismatch (HIGH)
-
-**VAE Training** (`train_ae.py:176`):
-```python
-z, mean, logvar = model.reparameterize(encoded, sample=True)  # Stochastic
-```
-
-**Flow Model Training** (`train_ngen.py:90`):
-```python
-z, _, _ = vae.reparameterize(encoded, sample=False)  # Deterministic (uses mean only)
-```
-
-**Issue**: The VAE is trained with stochastic sampling (reparameterization trick), but the flow model only ever sees the deterministic mean. This means:
-- VAE posterior variance is never utilized
-- Flow model trained on a **different distribution** than VAE was optimized for
-- The logvar output of VAE is essentially ignored during world model training
-
-**Impact**: Potential distribution mismatch causing blurry or inconsistent generations.
-
----
-
 ## 4. Missing Gradient Clipping (HIGH)
 
 **File**: `train_ngen.py` - no gradient clipping anywhere
@@ -328,27 +261,6 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=train_co
 # In training loop:
 scheduler.step()
 ```
-
----
-
-## 6. Skip Connection Spatial Mismatch (MEDIUM)
-
-**File**: `diffuse/nn/resblock.py:83-85`
-```python
-if x.shape[2:] != skip.shape[2:]:
-    x = torch.nn.functional.interpolate(x, size=skip.shape[2:], mode='bilinear', align_corners=False)
-```
-
-This bilinear interpolation is a **workaround for dimension mismatches** caused by:
-- Odd latent dimension (18 = 2 × 3²)
-- Repeated stride-2 operations on non-power-of-2 dimensions
-
-**Impact**:
-- Bilinear interpolation introduces gradient artifacts
-- `align_corners=False` can cause checkerboard patterns
-- Information loss at resolution boundaries
-
-**Better approach**: Pad inputs to power-of-2 dimensions, or use reflection padding.
 
 ---
 
@@ -403,60 +315,6 @@ img_tensor = img_tensor * 2 - 1  # Convert to [-1, 1]
 
 ---
 
-## 9. Hardcoded Latent Statistics (LOW-MEDIUM)
-
-**File**: `train_ngen.py:37-38`
-```python
-"latent_mean": 10.1880,
-"latent_std": 13.3726,
-```
-
-These are computed offline and hardcoded. If data distribution shifts:
-- Different gameplay style
-- More episodes added
-- Different PPO checkpoint
-
-The normalization becomes invalid, causing systematic bias.
-
-**Better approach**: Compute running statistics or recompute per training run.
-
----
-
-## 10. Additive Embedding Combination (LOW)
-
-**File**: `diffuse/nn/resblock.py:46-51`
-```python
-scale, shift = self.time_proj(t_emb)...
-if c_emb is not None:
-    class_scale, class_shift = self.class_proj(c_emb)...
-    scale, shift = scale + class_scale, shift + class_shift
-if aug_emb is not None:
-    aug_scale, aug_shift = self.aug_proj(aug_emb)...
-    scale, shift = scale + aug_scale, shift + aug_shift
-```
-
-Naive addition means if one embedding has larger magnitude, it dominates. No normalization ensures equal contribution.
-
-**Better approach**: Concatenate embeddings and project jointly, or normalize each before combining.
-
----
-
-## 11. Cold Start in Inference (LOW)
-
-**File**: `world/test_world.py:190-206`
-
-Initial frames are loaded from real VOD data:
-```python
-past_frames, current_frame = load_initial_frames(vod_dir, k, device)
-z_current = vae_encode(vae, current_frame, latent_mean, latent_std)
-```
-
-First prediction has **perfect real context**. Subsequent predictions use model-generated frames, creating a quality drop after the first frame.
-
-**Impact**: First generated frame may look better than subsequent ones, masking model quality issues.
-
----
-
 # PART 2: GAMENGEN COMPARISON ISSUES
 
 These are differences from the GameNGen paper that may impact quality.
@@ -477,7 +335,7 @@ These are differences from the GameNGen paper that may impact quality.
 - Cannot maintain consistent velocity over time
 - Cannot track score changes
 
-**Recommendation**: Increase to 8-16 frames for Flappy Bird, 32-64 for complex games.
+**Recommendation**: Increase to 8 frames. 
 
 ---
 
@@ -524,17 +382,6 @@ def euler_sample_cfg(model, z_0, z_cond, action, aug_level, cfg_scale=1.5, num_s
 
 ---
 
-## 14. Dataset Scale: ~164K vs 900M frames (HIGH)
-
-**Your data**: ~1000 episodes × ~164 frames = ~164K frames
-**GameNGen**: 900M frames (5000× more)
-
-**Recommendation**: Collect 1-10M frames minimum via:
-- Increase `num_episodes` in `vod/record.py`
-- Use multiple PPO checkpoints
-- Vary `p_stim` and `p_freeze` for diversity
-
----
 
 ## 15. No Decoder Fine-tuning (MEDIUM)
 
@@ -546,9 +393,11 @@ def euler_sample_cfg(model, z_0, z_cond, action, aug_level, cfg_scale=1.5, num_s
 
 **Recommendation**: After flow model converges, freeze everything except decoder, fine-tune with MSE on generated→real pairs.
 
+**DONT WORRY ABOUT THIS YET**
+
 ---
 
-## 16. Model Capacity (MEDIUM)
+## 16. Model Capacity (LOW)
 
 **Your config**:
 ```python
@@ -566,14 +415,7 @@ For Flappy Bird, smaller may be acceptable. If quality insufficient, increase to
 "num_layers": 3,
 ```
 
----
-
-## 17. Action Conditioning Method (LOW for Flappy Bird)
-
-**Your code**: AdaGN (global scale/shift modulation)
-**GameNGen**: Cross-attention on action sequence
-
-For binary flap/no-flap, AdaGN is likely sufficient. Would matter for complex action spaces.
+**DONT WORRY ABOUT THIS RIGHT NOW. DONT  CHANGE MY MODEL SIZE**
 
 ---
 
@@ -590,83 +432,97 @@ For binary flap/no-flap, AdaGN is likely sufficient. Would matter for complex ac
 
 # PRIORITY FIX ORDER
 
-## Phase 1: Critical Bugs (Fix Before Any Training)
+## NOW: diffuse/ and world/ Changes
 
-| # | Issue | Severity | Effort | File |
-|---|-------|----------|--------|------|
-| 1 | Episode boundary wrap-around | **CRITICAL** | Low | `ngen_data.py` |
-| 2 | ODE time stepping bug | **CRITICAL** | Low | `sampler.py` |
-| 3 | Inference normalization bugs | **CRITICAL** | Low | `test_world.py` |
-| 4 | Latent space bounds checking | **CRITICAL** | Low | `sampler.py` |
-| 5 | Train-test step mismatch | **CRITICAL** | Low | `test_world.py` |
+### Phase 1: Critical Bugs (Fix Immediately)
 
-## Phase 2: Data Quality (Before Retraining)
+| # | Issue | Severity | Effort | File | Status |
+|---|-------|----------|--------|------|--------|
+| 1 | Episode boundary wrap-around | **CRITICAL** | Low | `diffuse/ngen/ngen_data.py` | ✅ Already fixed |
+| 2 | ODE time stepping bug | **CRITICAL** | Low | `diffuse/ngen/sampler.py` | ✅ DONE |
+| 3 | Inference normalization bugs | **CRITICAL** | Low | `world/test_world.py` | ✅ Already fixed |
+| 4 | Latent space bounds checking | **CRITICAL** | Low | `diffuse/ngen/sampler.py` | ✅ DONE |
+| 5 | Train-test step mismatch | **CRITICAL** | Low | `world/test_world.py` | ✅ DONE |
 
-| # | Issue | Severity | Effort | File |
-|---|-------|----------|--------|------|
-| 6 | Enable behavioral augmentation | **CRITICAL** | Low | `record.py` |
-| 7 | Recollect diverse data | **HIGH** | High | `record.py` |
-| 8 | Save initial reset frame | MEDIUM | Low | `environment.py` |
+### Phase 2: Training Improvements
 
-## Phase 3: Training Improvements
+| # | Issue | Severity | Effort | File | Status |
+|---|-------|----------|--------|------|--------|
+| 6 | Context frames (2 → 8-16) | **CRITICAL** | Medium | `diffuse/ngen/train_ngen.py` | ✅ DONE (8 frames) |
+| 7 | Implement CFG | **HIGH** | Medium | `diffuse/ngen/train_ngen.py`, `diffuse/ngen/sampler.py` | ✅ DONE |
+| 8 | Add gradient clipping | HIGH | Low | `diffuse/ngen/train_ngen.py` | ✅ DONE |
+| 9 | Fix VAE sampling mismatch | HIGH | Low | `diffuse/ngen/train_ngen.py` | N/A |
+| 10 | Add LR scheduling | MEDIUM | Low | `diffuse/ngen/train_ngen.py` | ✅ DONE |
 
-| # | Issue | Severity | Effort | File |
-|---|-------|----------|--------|------|
-| 9 | Context frames (2 → 8-16) | **CRITICAL** | Medium | `train_ngen.py` |
-| 10 | Implement CFG | **HIGH** | Medium | `train_ngen.py`, `sampler.py` |
-| 11 | Add gradient clipping | HIGH | Low | `train_ngen.py` |
-| 12 | Fix VAE sampling mismatch | HIGH | Low | `train_ngen.py` |
-| 13 | Add LR scheduling | MEDIUM | Low | `train_ngen.py` |
+### Phase 3: Inference Stability
 
-## Phase 4: Inference Stability
+| # | Issue | Severity | Effort | File | Status |
+|---|-------|----------|--------|------|--------|
+| 11 | Fix noise injection (z_0) | HIGH | Low | `world/test_world.py` | ✅ DONE |
+| 12 | Set appropriate aug_level | MEDIUM | Low | `world/test_world.py` | ✅ DONE |
+| 13 | Add temporal smoothing | MEDIUM | Low | `world/test_world.py` | ✅ DONE |
 
-| # | Issue | Severity | Effort | File |
-|---|-------|----------|--------|------|
-| 14 | Fix noise injection (z_0) | HIGH | Low | `test_world.py` |
-| 15 | Set appropriate aug_level | MEDIUM | Low | `test_world.py` |
-| 16 | Add temporal smoothing | MEDIUM | Low | `test_world.py` |
+### Phase 4: Quality Refinements
 
-## Phase 5: Quality Refinements
-
-| # | Issue | Severity | Effort | File |
-|---|-------|----------|--------|------|
-| 17 | Decoder fine-tuning | MEDIUM | Medium | New script |
-| 18 | Increase model capacity | MEDIUM | Low | `train_ngen.py` |
+| # | Issue | Severity | Effort | File | Status |
+|---|-------|----------|--------|------|--------|
+| 14 | Decoder fine-tuning | MEDIUM | Medium | `diffuse/ae/train_ae.py` (new phase) | ⏳ Deferred |
+| 15 | Increase model capacity | MEDIUM | Low | `diffuse/ngen/train_ngen.py` | ⏳ Deferred |
 
 ---
 
-# FILES TO MODIFY
+## LATER: Data Collection Changes (vod/, game/)
 
-| File | Changes |
-|------|---------|
-| `diffuse/ngen/ngen_data.py` | Fix episode boundary wrap-around (line 60) |
-| `diffuse/ngen/sampler.py` | Fix ODE time stepping, add latent clipping, add CFG sampling |
-| `diffuse/ngen/train_ngen.py` | Add CFG dropout, gradient clipping, LR scheduler, increase context_frames, fix VAE sample mode |
-| `world/test_world.py` | Fix normalization bugs, match step count, fix z_0 injection, add temporal smoothing |
-| `vod/record.py` | Enable p_stim/p_freeze, increase num_episodes |
-| `game/environment.py` | Save initial reset frame |
-| `diffuse/ae/train_ae.py` | Add decoder fine-tuning phase |
+These changes should be done separately before retraining:
+
+| # | Issue | Severity | File |
+|---|-------|----------|------|
+| L1 | Enable behavioral augmentation (p_stim, p_freeze) | **CRITICAL** | `vod/record.py` |
+| L2 | Recollect diverse data (10K+ episodes) | **HIGH** | `vod/record.py` |
+| L3 | Save initial reset frame | MEDIUM | `game/environment.py` |
+
+---
+
+# FILES MODIFIED (Current Focus: diffuse/ and world/)
+
+| File | Changes | Status |
+|------|---------|--------|
+| `diffuse/ngen/ngen_data.py` | Fix episode boundary wrap-around, add done label parsing | ✅ Done |
+| `diffuse/ngen/sampler.py` | Fix ODE time stepping, add latent clipping, add CFG sampling | ✅ Done |
+| `diffuse/ngen/train_ngen.py` | Add CFG dropout, gradient clipping, LR scheduler, context_frames=8, done head training | ✅ Done |
+| `diffuse/ngen/loss.py` | Add done loss term (BCE) | ✅ Done |
+| `diffuse/nn/resunet.py` | Add done head MLP for termination detection | ✅ Done |
+| `diffuse/ae/train_ae.py` | Add decoder fine-tuning phase | ⏳ Deferred |
+| `world/test_world.py` | Fix normalization, match step count, fix z_0 injection, add smoothing, add done detection, add CFG | ✅ Done |
 
 ---
 
 # VERIFICATION CHECKLIST
 
 **Before Training:**
-- [ ] Episode wrap-around disabled (start_step = k for all episodes)
-- [ ] Data collected with behavioral augmentation enabled
-- [ ] Initial reset frames saved in VOD data
+- [x] Episode wrap-around disabled (start_step = k for all episodes) ✅
+- [ ] Data collected with behavioral augmentation enabled (deferred)
+- [ ] Initial reset frames saved in VOD data (deferred)
 
-**After Training:**
-- [ ] ODE integration reaches t=1.0 exactly
-- [ ] Forward and backward integration are symmetric
-- [ ] Inference uses same step count as training (50)
-- [ ] Initial frames normalized to [-1, 1]
-- [ ] Decoded images properly converted from [-1, 1] to [0, 1]
+**Code Implementation (complete):**
+- [x] ODE integration uses midpoint rule (t = (i+0.5)*dt) ✅
+- [x] Forward and backward integration are symmetric ✅
+- [x] Inference uses same step count as training (50) ✅
+- [x] Initial frames normalized to [-1, 1] ✅
+- [x] Decoded images properly converted from [-1, 1] to [0, 1] ✅
+- [x] Gradient clipping enabled (max_norm=1.0) ✅
+- [x] Latents clipped to [-3, 3] in normalized space ✅
+- [x] CFG implemented (10% dropout training, euler_sample_cfg) ✅
+- [x] LR scheduling (cosine annealing) ✅
+- [x] Context frames = 8 ✅
+- [x] Done head implemented ✅
+
+**After Retraining (to verify):**
 - [ ] Gradient norms stay bounded during training
-- [ ] Latents clipped to [-3, 3] in normalized space
 - [ ] CFG improves conditioning adherence
+- [ ] Done head fires near crash frames
 
-**Long-horizon Generation:**
+**Long-horizon Generation (to verify):**
 - [ ] Generated sequences maintain consistency >30 seconds
 - [ ] No catastrophic drift after 1000+ frames
 - [ ] Bird physics appear realistic
@@ -676,24 +532,26 @@ For binary flap/no-flap, AdaGN is likely sufficient. Would matter for complex ac
 
 # QUICK REFERENCE
 
-| Aspect | GameNGen | Your Implementation | Issue? |
+| Aspect | GameNGen | Your Implementation | Status |
 |--------|----------|---------------------|--------|
-| Episode boundaries | Proper isolation | Wrap-around contamination | **CRITICAL** |
-| Behavioral diversity | RL exploration | Single policy (p_stim=0) | **CRITICAL** |
-| Latent bounds | Implicit | No checking | **CRITICAL** |
-| ODE endpoint | Proper | Stops at t=0.98 | **CRITICAL** |
-| z_0 initialization | Coupled | Fresh random each frame | **HIGH** |
-| Context frames | 64 | 2 | **CRITICAL** |
-| CFG | Yes (1.5) | No | **HIGH** |
-| Inference steps | 4 DDIM | 20 Euler (vs 50 train) | **HIGH** |
-| Data size | 900M | ~164K | **HIGH** |
-| Gradient clip | Yes (1.0) | No | **HIGH** |
-| aug_level inference | Matched | Static 0 | MEDIUM |
-| Temporal smoothing | Implicit | None | MEDIUM |
-| Decoder fine-tune | Yes | No | MEDIUM |
+| Episode boundaries | Proper isolation | Wrap-around contamination | ✅ Fixed |
+| Behavioral diversity | RL exploration | Single policy (p_stim=0) | ⏳ Deferred |
+| Latent bounds | Implicit | No checking | ✅ Fixed |
+| ODE endpoint | Proper | Stops at t=0.98 | ✅ Fixed (midpoint rule) |
+| z_0 initialization | Coupled | Fresh random each frame | ✅ Fixed (perturbation) |
+| Context frames | 64 | 2 | ✅ Fixed (8 frames) |
+| CFG | Yes (1.5) | No | ✅ Fixed |
+| Inference steps | 4 DDIM | 20 Euler (vs 50 train) | ✅ Fixed (50 steps) |
+| Data size | 900M | ~164K | ⏳ Deferred |
+| Gradient clip | Yes (1.0) | No | ✅ Fixed |
+| aug_level inference | Matched | Static 0 | ✅ Fixed (default 8) |
+| Temporal smoothing | Implicit | None | ✅ Fixed (optional) |
+| Decoder fine-tune | Yes | No | ⏳ Deferred |
 | Model params | ~860M | ~3-5M | Acceptable |
 | Action conditioning | Cross-attn | AdaGN | Acceptable |
 | Noise aug training | 0.7, 10 bins | 0.5, 16 bins | OK |
+| Done head | N/A | N/A | ✅ Implemented |
+| LR scheduling | Yes | No | ✅ Fixed (cosine) |
 
 ---
 
@@ -705,40 +563,37 @@ For binary flap/no-flap, AdaGN is likely sufficient. Would matter for complex ac
 
 ---
 
-# TODO: Add explicit "done" head for end-of-episode detection
+# ✅ DONE: Add explicit "done" head for end-of-episode detection
 
-**Context / Why:**  
-The world model predicts only the next frame. It has no way to declare a terminal state, especially now that conditioning windows stay within a single episode. Without an explicit termination signal, inference can continue generating frames past the true end of an episode, which leads to unrealistic rollouts and action/physics drift. GameNGen handles session transitions by including reset moments in the context; here we need a direct termination prediction to stop/reset cleanly.
+**Status: IMPLEMENTED**
 
-**What this accomplishes:**  
-Adds a reliable, learned "game over" signal during rollout. This allows the loop to end or reset at the right time, improves long-horizon stability, and avoids learning impossible post-termination transitions.
+**What was implemented:**
 
-## Plan
-
-1) **Add termination labels to the dataset**
+1) ✅ **Add termination labels to the dataset** (`diffuse/ngen/ngen_data.py`)
    - Parse `terminated` and `truncated` from `run_info.jsonl` in each VOD run.
    - For each frame `t`, create `done_t = terminated_t OR truncated_t`.
-   - Align `done_t` with the same `step` index used for `current_frame` in `TraceDataset`.
-   - If logs are missing, fall back to `done_t = 1` for the final frame in the episode.
+   - Falls back to `done_t = 1` for the final frame in the episode.
+   - Dataset returns done labels when `include_done=True`.
 
-2) **Extend the model with a "done" head**
-   - Add a small MLP or 1x1 conv head to `ResUNet` (or a wrapper module) that outputs a scalar logit per sample.
-   - Feed it a stable feature (e.g., bottleneck features or pooled `z_t` + conditioning).
-   - Keep the main flow head unchanged.
+2) ✅ **Extend the model with a "done" head** (`diffuse/nn/resunet.py`)
+   - Added MLP head from bottleneck features: `AdaptiveAvgPool2d → Linear(64) → SiLU → Linear(1)`.
+   - Enabled via `use_done_head=True` constructor arg.
+   - `forward(..., return_done=True)` returns `(v_pred, done_logit)`.
 
-3) **Update the loss**
-   - Add `BCEWithLogitsLoss(done_logit, done_label)` to the existing flow loss.
-   - Introduce a weight `done_loss_weight` (start with 0.1–1.0) and tune if needed.
+3) ✅ **Update the loss** (`diffuse/ngen/loss.py`)
+   - Added `BCEWithLogitsLoss(done_logit, done_label)` to flow loss.
+   - Configurable `done_loss_weight` (default 0.1).
 
-4) **Train and validate**
-   - Train the augmented model on the same VOD data.
-   - Track `done` accuracy/precision/recall; ensure low false negatives (missed terminations).
+4) ✅ **Training integration** (`diffuse/ngen/train_ngen.py`)
+   - Added config: `use_done_head: True`, `done_loss_weight: 0.1`.
+   - Dataset loaded with `include_done=True`.
+   - Training loop unpacks done labels and passes to loss function.
+   - Logging includes `done_loss`.
 
-5) **Use the done head during inference**
-   - In `world/test_world.py`, after sampling the next frame, compute `done_prob`.
-   - If `done_prob > threshold` (e.g., 0.5–0.7), stop the rollout or reset to a new episode.
-   - Optionally show a visual indicator for detected termination.
+5) ✅ **Inference integration** (`world/test_world.py`)
+   - Added `--done-threshold` CLI arg (default 0.5).
+   - After sampling, checks `done_prob` and prints "Game Over!" if above threshold.
 
-6) **Sanity checks**
-   - Verify that `done` fires near actual crash frames in held-out episodes.
-   - Ensure rollouts stop within 1–2 frames of true termination.
+6) **Sanity checks** - To be verified after retraining:
+   - [ ] Verify that `done` fires near actual crash frames in held-out episodes.
+   - [ ] Ensure rollouts stop within 1–2 frames of true termination.

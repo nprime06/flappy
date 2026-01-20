@@ -5,21 +5,22 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
 class TraceDataset(Dataset):
-    """Dataset that returns (past_k_frames, current_frame, action) for world model training.
-    
+    """Dataset that returns (past_k_frames, current_frame, action, [done]) for world model training.
+
     Each episode is independent: samples start from step k (k+1th frame) and go to the end.
     No mixing between episodes.
     """
 
-    def __init__(self, vod_dir, k=4):
+    def __init__(self, vod_dir, k=4, include_done=False):
         import json
         self.k = k
+        self.include_done = include_done
         self.transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
         ])
 
-        # Build index: list of (frames_dir, step_idx, action) for valid samples
+        # Build index: list of (frames_dir, step_idx, action, done) for valid samples
         self.samples = []
         for run_dir in Path(vod_dir).glob("*/*/"):
             frames_dir = run_dir / "frames"
@@ -27,25 +28,30 @@ class TraceDataset(Dataset):
             if not frames_dir.exists() or not info_file.exists():
                 continue
 
-            # Parse actions from run_info.jsonl
+            # Parse actions AND done flags from run_info.jsonl
             actions = {}
+            done_flags = {}
             with open(info_file) as f:
                 for line in f:
                     rec = json.loads(line)
                     if "step" in rec:
                         actions[rec["step"]] = rec["action"]
+                        # Check for termination or truncation flags
+                        done_flags[rec["step"]] = rec.get("terminated", False) or rec.get("truncated", False)
 
             # Valid samples: steps where we have k prior frames within the same episode
             n_frames = len(list(frames_dir.glob("*.png")))
             for step in range(k, n_frames):
                 if step in actions:
-                    self.samples.append((frames_dir, step, actions[step]))
+                    # Fallback: last frame is done if not explicitly marked
+                    done = done_flags.get(step, step == n_frames - 1)
+                    self.samples.append((frames_dir, step, actions[step], done))
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        frames_dir, step, action = self.samples[idx]
+        frames_dir, step, action, done = self.samples[idx]
 
         # Load current frame
         current = Image.open(frames_dir / f"{step:06d}.png").convert("RGB")
@@ -58,6 +64,8 @@ class TraceDataset(Dataset):
             past.append(self.transform(frame))
         past = torch.stack(past)  # (k, C, H, W)
 
+        if self.include_done:
+            return past, current, torch.tensor(action, dtype=torch.long), torch.tensor(done, dtype=torch.float)
         return past, current, torch.tensor(action, dtype=torch.long)
 
 

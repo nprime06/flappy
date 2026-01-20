@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 import torch
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -25,8 +26,11 @@ model_config = {
     "num_layers": 2,            # limited by odd latent width (18)
     "embed_dim": 128,
     "num_classes": 2,           # flappy bird: 0=no-flap, 1=flap
-    "context_frames": 2,        # k past frames
+    "context_frames": 8,        # k past frames (increased from 2)
     "num_aug_bins": 16,
+    "cfg_dropout_prob": 0.1,    # CFG: zero out conditioning 10% of time
+    "use_done_head": True,      # Enable termination detection head
+    "done_loss_weight": 0.1,    # Weight for done head BCE loss
 }
 
 train_config = {
@@ -124,12 +128,14 @@ def train(run_dir=None, reflow_checkpoint=None):
         num_classes=model_config["num_classes"],
         context_channels=model_config["context_frames"] * model_config["in_channels"],
         num_aug_bins=model_config["num_aug_bins"],
+        use_done_head=model_config.get("use_done_head", False),
     ).to(device)
 
     num_params = sum(p.numel() for p in model.parameters())
     print(f"Flow model has {num_params:,} parameters")
 
     optimizer = AdamW(model.parameters(), lr=train_config["lr"])
+    scheduler = CosineAnnealingLR(optimizer, T_max=train_config["num_epochs"], eta_min=1e-6)
 
     # Setup run directory
     if run_dir is None:
@@ -171,7 +177,8 @@ def train(run_dir=None, reflow_checkpoint=None):
         print(f"Resumed at epoch {start_epoch}")
 
     # Setup data
-    dataset = TraceDataset(train_config["data_dir"], k=model_config["context_frames"])
+    include_done = model_config.get("use_done_head", False)
+    dataset = TraceDataset(train_config["data_dir"], k=model_config["context_frames"], include_done=include_done)
     dataloader = DataLoader(
         dataset,
         batch_size=train_config["batch_size"],
@@ -192,13 +199,26 @@ def train(run_dir=None, reflow_checkpoint=None):
     max_aug_std = train_config["max_aug_std"]
     num_aug_bins = model_config["num_aug_bins"]
 
+    cfg_dropout_prob = model_config.get("cfg_dropout_prob", 0.0)
+    use_done_head = model_config.get("use_done_head", False)
+    done_loss_weight = model_config.get("done_loss_weight", 0.1)
+
     model.train()
     for epoch in tqdm(range(start_epoch, train_config["num_epochs"])):
         epoch_loss = 0.0
         epoch_v_pred_norm = 0.0
         epoch_v_target_norm = 0.0
+        epoch_done_loss = 0.0
 
-        for past_frames, current_frame, action in dataloader:
+        for batch in dataloader:
+            # Unpack batch (with or without done labels)
+            if use_done_head:
+                past_frames, current_frame, action, done_labels = batch
+                done_labels = done_labels.to(device)
+            else:
+                past_frames, current_frame, action = batch
+                done_labels = None
+
             past_frames = past_frames.to(device)
             current_frame = current_frame.to(device)
             action = action.to(device)
@@ -217,6 +237,11 @@ def train(run_dir=None, reflow_checkpoint=None):
             aug_std = aug_level.float() / num_aug_bins * max_aug_std
             z_cond = z_cond + torch.randn_like(z_cond) * aug_std.view(B, 1, 1, 1)
 
+            # CFG dropout: zero out conditioning for a fraction of samples
+            if cfg_dropout_prob > 0:
+                cfg_mask = torch.rand(B, device=device) < cfg_dropout_prob
+                z_cond = torch.where(cfg_mask.view(B, 1, 1, 1), torch.zeros_like(z_cond), z_cond)
+
             # Get z_0 (either from N(0,1) or from reflow generator)
             if reflow_generator is not None:
                 # Reflow: infer z_0 from real z_target by flowing backward
@@ -226,31 +251,46 @@ def train(run_dir=None, reflow_checkpoint=None):
                 z_0 = None  # Will sample from N(0,1) in loss function
 
             # Compute loss
-            loss, info = flow_matching_loss(model, z_target, z_cond, action, aug_level, z_0=z_0)
+            loss, info = flow_matching_loss(
+                model, z_target, z_cond, action, aug_level, z_0=z_0,
+                done_labels=done_labels, done_loss_weight=done_loss_weight
+            )
 
             # Backward
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Gradient clipping
             optimizer.step()
 
             epoch_loss += loss.item()
             epoch_v_pred_norm += info["v_pred_norm"]
             epoch_v_target_norm += info["v_target_norm"]
+            if "done_loss" in info:
+                epoch_done_loss += info["done_loss"]
+
+        # Step the LR scheduler
+        scheduler.step()
 
         n_batches = len(dataloader)
         avg_loss = epoch_loss / n_batches
         avg_v_pred_norm = epoch_v_pred_norm / n_batches
         avg_v_target_norm = epoch_v_target_norm / n_batches
+        avg_done_loss = epoch_done_loss / n_batches if use_done_head else 0.0
         wall_time_s = total_wall_time + (time.perf_counter() - train_start_t)
+        current_lr = scheduler.get_last_lr()[0]
 
         # Log every epoch
-        log_file.write(json.dumps({
+        log_entry = {
             "epoch": epoch + 1,
             "loss": avg_loss,
             "v_pred_norm": avg_v_pred_norm,
             "v_target_norm": avg_v_target_norm,
+            "lr": current_lr,
             "wall_time_s": wall_time_s,
-        }) + "\n")
+        }
+        if use_done_head:
+            log_entry["done_loss"] = avg_done_loss
+        log_file.write(json.dumps(log_entry) + "\n")
 
         if (epoch + 1) % train_config["log_interval"] == 0:
             print(f"Epoch {epoch+1:4d}/{train_config['num_epochs']} | Loss: {avg_loss:.6f}")

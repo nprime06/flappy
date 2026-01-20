@@ -27,9 +27,10 @@ def euler_sample(model, z_0, z_cond, action, aug_level, num_steps=50):
 
     z = z_0
     for i in range(num_steps):
-        t = torch.full((B,), i * dt, device=device)
+        t = torch.full((B,), (i + 0.5) * dt, device=device)  # Midpoint rule
         v = model(z, t, c=action, z_cond=z_cond, aug_level=aug_level)
         z = z + v * dt
+        z = torch.clamp(z, -3.0, 3.0)  # Keep in ~3 std of normalized distribution
 
     return z
 
@@ -58,9 +59,48 @@ def euler_sample_backward(model, z_1, z_cond, action, aug_level, num_steps=50):
 
     z = z_1
     for i in range(num_steps):
-        t = torch.full((B,), 1.0 - i * dt, device=device)
+        t = torch.full((B,), 1.0 - (i + 0.5) * dt, device=device)  # Midpoint rule
         v = model(z, t, c=action, z_cond=z_cond, aug_level=aug_level)
         z = z - v * dt  # subtract (backward direction)
+        z = torch.clamp(z, -3.0, 3.0)  # Keep in ~3 std of normalized distribution
+
+    return z
+
+
+@torch.no_grad()
+def euler_sample_cfg(model, z_0, z_cond, action, aug_level, cfg_scale=1.5, num_steps=50):
+    """
+    Sample from flow model using Euler ODE solver with Classifier-Free Guidance.
+
+    Integrates: dz/dt = v(z, t) from t=0 to t=1 with CFG interpolation.
+
+    Args:
+        model: Flow model predicting velocity
+        z_0: Starting noise (B, C, H, W)
+        z_cond: Conditioning latents (B, k*C, H, W)
+        action: Action indices (B,)
+        aug_level: Augmentation level indices (B,)
+        cfg_scale: Classifier-free guidance scale (1.0 = no guidance)
+        num_steps: Number of Euler steps
+
+    Returns:
+        z_1: Final sample at t=1 (B, C, H, W)
+    """
+    B = z_0.shape[0]
+    device = z_0.device
+    dt = 1.0 / num_steps
+    z_cond_null = torch.zeros_like(z_cond)
+
+    z = z_0
+    for i in range(num_steps):
+        t = torch.full((B,), (i + 0.5) * dt, device=device)  # Midpoint rule
+
+        v_cond = model(z, t, c=action, z_cond=z_cond, aug_level=aug_level)
+        v_uncond = model(z, t, c=action, z_cond=z_cond_null, aug_level=aug_level)
+        v = v_uncond + cfg_scale * (v_cond - v_uncond)
+
+        z = z + v * dt
+        z = torch.clamp(z, -3.0, 3.0)  # Keep in ~3 std of normalized distribution
 
     return z
 

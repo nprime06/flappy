@@ -4,9 +4,10 @@ from .embedding import TimeEmbedding
 from .resblock import ResBlock, DownResBlock, UpResBlock
 
 class ResUNet(nn.Module):
-    def __init__(self, in_channels, hidden_channels, num_layers, embed_dim, out_channels=None, num_classes=0, context_channels=0, num_aug_bins=0):
+    def __init__(self, in_channels, hidden_channels, num_layers, embed_dim, out_channels=None, num_classes=0, context_channels=0, num_aug_bins=0, use_done_head=False):
         super().__init__()
         self.context_channels = context_channels
+        self.use_done_head = use_done_head
         self.time_embedding = TimeEmbedding(embed_dim=embed_dim)
         self.class_embedding = nn.Embedding(num_classes + 1, embed_dim) if num_classes > 0 else None
         self.aug_embedding = nn.Embedding(num_aug_bins, embed_dim) if num_aug_bins > 0 else None
@@ -29,7 +30,18 @@ class ResUNet(nn.Module):
             out_channels = in_channels
         self.out_conv = nn.Conv2d(hidden_channels, out_channels, kernel_size=1)
 
-    def forward(self, x, t, c=None, z_cond=None, aug_level=None):
+        # Done head: predicts termination from bottleneck features
+        if use_done_head:
+            bottleneck_channels = hidden_channels * 2**num_layers
+            self.done_head = nn.Sequential(
+                nn.AdaptiveAvgPool2d(1),
+                nn.Flatten(),
+                nn.Linear(bottleneck_channels, 64),
+                nn.SiLU(),
+                nn.Linear(64, 1),
+            )
+
+    def forward(self, x, t, c=None, z_cond=None, aug_level=None, return_done=False):
         # x: (B, C, H, W), t: (B,), c: (B,), z_cond: (B, context_channels, H, W), aug_level: (B,)
         if z_cond is not None:
             x = torch.cat([x, z_cond], dim=1)
@@ -43,7 +55,16 @@ class ResUNet(nn.Module):
             x, skip = down_block(x, t_emb, c_emb, aug_emb)
             skip_connections.append(skip)
         x = self.bot(x, t_emb, c_emb, aug_emb)
+
+        # Compute done logit from bottleneck if requested
+        done_logit = None
+        if self.use_done_head and return_done:
+            done_logit = self.done_head(x)
+
         for up_block in self.up_blocks:
             x = up_block(x, skip_connections.pop(), t_emb, c_emb, aug_emb)
         x = self.out_conv(x)
+
+        if return_done:
+            return x, done_logit
         return x
