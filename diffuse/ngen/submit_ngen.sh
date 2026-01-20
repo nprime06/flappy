@@ -10,15 +10,18 @@
 #SBATCH --output="/home/willzhao/flappy/diffuse/ngen/%x-%j.log"
 #SBATCH --error="/home/willzhao/flappy/diffuse/ngen/%x-%j.err"
 
-# USAGE: 
-# Standard flow matching:
-# sbatch submit_ngen.sh
-
+# USAGE:
+# Single GPU (default):
+#   sbatch submit_ngen.sh
+#
+# Multi-GPU (must also update SBATCH --gres and -c):
+#   NUM_GPUS=4 sbatch submit_ngen.sh
+#
 # Resume training:
-# RUN_DIR=/home/willzhao/flappy/diffuse/ngen/runs/ngen_xxx sbatch submit_ngen.sh
-
-# Reflow (rectified flow) training:
-# REFLOW=/home/willzhao/flappy/diffuse/ngen/runs/ngen_xxx/checkpoints/latest.pt sbatch submit_ngen.sh
+#   RUN_DIR=/path/to/run sbatch submit_ngen.sh
+#
+# Reflow training:
+#   REFLOW=/path/to/checkpoint.pt sbatch submit_ngen.sh
 
 set -euo pipefail
 
@@ -31,17 +34,19 @@ conda activate /home/willzhao/flappy/.conda/py31114
 export PYTHONUNBUFFERED=1
 export PYTHONPATH="/home/willzhao/flappy/diffuse:${PYTHONPATH:-}"
 
-# Optional: specify run directory to resume
+# Configuration
+NUM_GPUS="${NUM_GPUS:-1}"
 RUN_DIR="${RUN_DIR:-}"
-# Optional: specify reflow checkpoint for rectified flow training
 REFLOW="${REFLOW:-}"
 
 ARGS=""
 if [[ -n "$RUN_DIR" ]]; then
-  ARGS="$ARGS --run-dir $RUN_DIR"
+    ARGS="$ARGS --run-dir $RUN_DIR"
 fi
 if [[ -n "$REFLOW" ]]; then
-  ARGS="$ARGS --reflow $REFLOW"
+    ARGS="$ARGS --reflow $REFLOW"
 fi
 
-python /home/willzhao/flappy/diffuse/ngen/train_ngen.py $ARGS
+# Use torchrun for DDP support (works with single GPU too)
+torchrun --standalone --nproc_per_node=$NUM_GPUS \
+    /home/willzhao/flappy/diffuse/ngen/train_ngen.py $ARGS
