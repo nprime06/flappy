@@ -4,9 +4,9 @@
 # USAGE:
 #   ./submit_ngen.sh                           # New run, 1 GPU
 #   ./submit_ngen.sh --gpus 4                  # New run, 4 GPUs
-#   ./submit_ngen.sh --run-dir /path/to/run    # Resume existing run
+#   ./submit_ngen.sh --run-dir /path/to/run    # Resume existing run (use full absolute path)
 #   ./submit_ngen.sh --reflow /path/to/ckpt    # Reflow training
-#   ./submit_ngen.sh --gpus 4 --run-dir /path  # Resume with 4 GPUs
+#   ./submit_ngen.sh --gpus 4 --run-dir /path  # Resume with 4 GPUs (use full absolute path)
 
 set -euo pipefail
 

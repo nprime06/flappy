@@ -46,6 +46,7 @@ def load_flow_model(checkpoint_path, device):
         num_classes=cfg["num_classes"],
         context_channels=cfg["context_frames"] * cfg["in_channels"],
         num_aug_bins=cfg["num_aug_bins"],
+        use_done_head=cfg.get("use_done_head", False),
     ).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()

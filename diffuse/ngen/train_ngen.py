@@ -73,7 +73,7 @@ train_config = {
     "latent_std": 13.3726,
     "log_interval": 1,
     "checkpoint_interval": 5,
-    "num_workers": 2,
+    "num_workers": 4,
     "reflow_steps": 50,         # Euler steps for reflow pair generation
     "vae_checkpoint": "/home/willzhao/flappy/diffuse/ae/runs/vae_20260115_022006/checkpoints/latest.pt",
     "data_dir": "/home/willzhao/flappy/vod",
@@ -174,7 +174,15 @@ def train(run_dir=None, reflow_checkpoint=None):
 
     # Wrap in DDP if multi-GPU
     if world_size > 1:
-        model = DDP(model, device_ids=[local_rank])
+        # Optimize DDP settings for better performance:
+        # - find_unused_parameters=False: faster (default, but explicit)
+        # - gradient_as_bucket_view=True: reduces memory and improves comm efficiency
+        model = DDP(
+            model,
+            device_ids=[local_rank],
+            find_unused_parameters=False,
+            gradient_as_bucket_view=True,
+        )
 
     # Access raw model for state_dict (unwrap DDP if needed)
     raw_model = model.module if world_size > 1 else model
@@ -229,6 +237,9 @@ def train(run_dir=None, reflow_checkpoint=None):
         total_wall_time = ckpt.get("wall_time_s", 0.0)
         if is_main:
             print(f"Resumed at epoch {start_epoch}")
+        # Synchronize all ranks after checkpoint loading
+        if world_size > 1:
+            dist.barrier()
 
     # Setup data with DistributedSampler for multi-GPU
     include_done = model_config.get("use_done_head", False)
@@ -236,6 +247,8 @@ def train(run_dir=None, reflow_checkpoint=None):
 
     if world_size > 1:
         sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
+        # Each DDP process has its own DataLoader with its own workers
+        # Don't scale with world_size - that happens automatically across processes
         dataloader = DataLoader(
             dataset,
             batch_size=train_config["batch_size"],  # Per-GPU batch size
@@ -299,6 +312,9 @@ def train(run_dir=None, reflow_checkpoint=None):
             B, k = past_frames.shape[:2]
 
             # Encode through frozen VAE (with bfloat16 for speed)
+            # NOTE: VAE encoding is a bottleneck - each GPU encodes independently.
+            # With multi-GPU, total encoding work stays the same but DDP overhead adds cost.
+            # Consider caching encoded latents or using torch.compile if memory allows.
             with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 z_target = vae_encode(vae, current_frame, latent_mean, latent_std)
                 past_flat = past_frames.flatten(0, 1)
@@ -331,9 +347,11 @@ def train(run_dir=None, reflow_checkpoint=None):
                 )
 
             # Backward (autocast handles gradient dtype automatically)
+            # DDP synchronizes gradients automatically during backward()
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Gradient clipping
+            # Clip gradients on raw model (DDP wrapper handles sync, but we clip on unwrapped model)
+            torch.nn.utils.clip_grad_norm_(raw_model.parameters(), max_norm=1.0)
             optimizer.step()
 
             epoch_loss += loss.item()

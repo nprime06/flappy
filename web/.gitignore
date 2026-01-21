@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.local
+
+# ONNX model files (too large for git)
+public/models/*.onnx
+
+# IDE
+.vscode/
+.idea/
