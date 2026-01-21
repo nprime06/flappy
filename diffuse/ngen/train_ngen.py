@@ -73,7 +73,7 @@ train_config = {
     "latent_std": 13.3726,
     "log_interval": 1,
     "checkpoint_interval": 5,
-    "num_workers": 4,
+    "num_workers": 2,
     "reflow_steps": 50,         # Euler steps for reflow pair generation
     "vae_checkpoint": "/home/willzhao/flappy/diffuse/ae/runs/vae_20260115_022006/checkpoints/latest.pt",
     "data_dir": "/home/willzhao/flappy/vod",

@@ -44,7 +44,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Calculate resources based on GPU count
-CPUS_PER_GPU=8
+CPUS_PER_GPU=4
 NUM_CPUS=$((NUM_GPUS * CPUS_PER_GPU))
 MEM_PER_GPU=64
 TOTAL_MEM=$((NUM_GPUS * MEM_PER_GPU))
