@@ -144,7 +144,7 @@ def train(run_dir=None, reflow_checkpoint=None):
     if is_main:
         print(f"Loading VAE from {train_config['vae_checkpoint']}")
     vae = load_vae(train_config["vae_checkpoint"], device)
-    vae.encoder = torch.compile(vae.encoder)  # Only compile encoder (used 4608x per batch)
+    # vae.encoder = torch.compile(vae.encoder)  # Disabled: causes OOM on multi-GPU DDP
 
     # Load reflow model if specified (not wrapped in DDP - inference only)
     reflow_generator = None
