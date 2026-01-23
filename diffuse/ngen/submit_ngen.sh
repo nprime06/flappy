@@ -14,7 +14,7 @@ set -euo pipefail
 NUM_GPUS=1
 RUN_DIR=""
 REFLOW=""
-TIME="6:00:01"
+TIME="6:00:00"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
