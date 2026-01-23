@@ -129,8 +129,8 @@ def main():
                         help="Display scale factor")
     parser.add_argument("--noise-scale", type=float, default=0.1,
                         help="Scale of noise perturbation for z_0 (0 = pure noise, small = perturbation)")
-    parser.add_argument("--aug-level", type=int, default=8,
-                        help="Augmentation level at inference (0-15, 8 = median)")
+    parser.add_argument("--aug-level", type=int, default=0,
+                        help="Augmentation level at inference (0-15, 0 = no noise on z_cond)")
     parser.add_argument("--smoothing", type=float, default=0.0,
                         help="Temporal smoothing factor (0 = none, >0 blends with previous)")
     parser.add_argument("--done-threshold", type=float, default=0.5,
@@ -139,6 +139,8 @@ def main():
                         help="Use classifier-free guidance during sampling")
     parser.add_argument("--cfg-scale", type=float, default=1.5,
                         help="CFG scale (only used with --use-cfg)")
+    parser.add_argument("--debug", action="store_true",
+                        help="Print debug info every frame")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -249,7 +251,12 @@ def main():
         if keys[pygame.K_SPACE]:
             action = 1
 
-        # Prepare conditioning
+        # Update frame buffer FIRST to include current displayed frame in context
+        # This is critical: we predict the NEXT frame, so context must include current frame
+        frame_buffer.pop(0)
+        frame_buffer.append(z_display.clone())
+
+        # Prepare conditioning (now includes z_display)
         z_cond = torch.cat(frame_buffer, dim=1)  # (1, k*latent_ch, H', W')
         action_tensor = torch.tensor([action], dtype=torch.long, device=device)
 
@@ -288,9 +295,23 @@ def main():
                     # Could break here or reset to new episode
                     # For now, just print and continue
 
-        # Update frame buffer (shift left, add new)
-        frame_buffer.pop(0)
-        frame_buffer.append(z_display.clone())
+        # Debug logging
+        if args.debug and frame_count % 10 == 0:
+            # Test action conditioning: what would happen with opposite action?
+            with torch.no_grad():
+                alt_action = 1 - action
+                alt_action_tensor = torch.tensor([alt_action], dtype=torch.long, device=device)
+                z_next_alt = euler_sample(
+                    flow_model, z_0, z_cond, alt_action_tensor, aug_level,
+                    num_steps=args.num_steps
+                )
+                action_diff = torch.abs(z_next - z_next_alt).mean().item()
+
+            print(f"Frame {frame_count}: action={action}, "
+                  f"z_cond=[{z_cond.min():.2f}, {z_cond.max():.2f}], "
+                  f"z_next=[{z_next.min():.2f}, {z_next.max():.2f}], "
+                  f"frame_diff={torch.abs(z_next - z_display).mean():.4f}, "
+                  f"action_diff={action_diff:.4f}")
 
         # Update current display latent
         z_display = z_next

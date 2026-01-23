@@ -62,6 +62,7 @@ model_config = {
     "cfg_dropout_prob": 0.1,    # CFG: zero out conditioning 10% of time
     "use_done_head": True,      # Enable termination detection head
     "done_loss_weight": 0.1,    # Weight for done head BCE loss
+    "action_weight": 17.0,      # Loss weight for action=1 (fixes 94.6%/5.4% imbalance)
 }
 
 train_config = {
@@ -284,6 +285,7 @@ def train(run_dir=None, reflow_checkpoint=None):
     cfg_dropout_prob = model_config.get("cfg_dropout_prob", 0.0)
     use_done_head = model_config.get("use_done_head", False)
     done_loss_weight = model_config.get("done_loss_weight", 0.1)
+    action_weight = model_config.get("action_weight", 1.0)
 
     model.train()
     epoch_iterator = tqdm(range(start_epoch, train_config["num_epochs"])) if is_main else range(start_epoch, train_config["num_epochs"])
@@ -343,7 +345,8 @@ def train(run_dir=None, reflow_checkpoint=None):
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 loss, info = flow_matching_loss(
                     model, z_target, z_cond, action, aug_level, z_0=z_0,
-                    done_labels=done_labels, done_loss_weight=done_loss_weight
+                    done_labels=done_labels, done_loss_weight=done_loss_weight,
+                    action_weight=action_weight
                 )
 
             # Backward (autocast handles gradient dtype automatically)

@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 
 def flow_matching_loss(model, z_target, z_cond, action, aug_level, z_0=None,
-                       done_labels=None, done_loss_weight=0.1):
+                       done_labels=None, done_loss_weight=0.1, action_weight=1.0):
     """
     Compute flow matching loss with optional done head loss.
 
@@ -19,6 +19,7 @@ def flow_matching_loss(model, z_target, z_cond, action, aug_level, z_0=None,
              For reflow, this is the noise paired with z_target.
         done_labels: Binary labels for termination (B,). If None, skip done loss.
         done_loss_weight: Weight for done head BCE loss.
+        action_weight: Loss weight multiplier for action=1 samples (to fix class imbalance).
 
     Returns:
         loss: Total loss (flow + done)
@@ -48,8 +49,15 @@ def flow_matching_loss(model, z_target, z_cond, action, aug_level, z_0=None,
     else:
         v_pred = model(z_t, t, c=action, z_cond=z_cond, aug_level=aug_level)
 
-    # MSE loss for flow matching
-    flow_loss = F.mse_loss(v_pred, v_target)
+    # MSE loss for flow matching (per-sample, then weighted)
+    mse_per_sample = ((v_pred - v_target) ** 2).mean(dim=[1, 2, 3])  # (B,)
+
+    # Apply higher weight to action=1 samples to fix class imbalance
+    if action_weight > 1.0:
+        weights = torch.where(action == 1, action_weight, 1.0)
+        flow_loss = (mse_per_sample * weights).mean()
+    else:
+        flow_loss = mse_per_sample.mean()
 
     info = {
         "v_pred_norm": v_pred.detach().flatten(1).norm(dim=1).mean().item(),

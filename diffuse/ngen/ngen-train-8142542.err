@@ -1,17 +1,0 @@
-  0%|          | 0/5 [00:00<?, ?it/s]  0%|          | 0/5 [00:01<?, ?it/s]
-Traceback (most recent call last):
-  File "/home/willzhao/flappy/diffuse/ngen/train_ngen.py", line 281, in <module>
-    train(run_dir=args.run_dir, reflow_checkpoint=args.reflow)
-  File "/home/willzhao/flappy/diffuse/ngen/train_ngen.py", line 229, in train
-    loss, info = flow_matching_loss(model, z_target, z_cond, action, aug_level, z_0=z_0)
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/willzhao/flappy/diffuse/ngen/loss.py", line 48, in flow_matching_loss
-    "v_pred_norm": v_pred.detach().norm(dim=(1, 2, 3)).mean().item(),
-                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/willzhao/flappy/.conda/py31114/lib/python3.11/site-packages/torch/_tensor.py", line 871, in norm
-    return torch.norm(self, p, dim, keepdim, dtype=dtype)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/home/willzhao/flappy/.conda/py31114/lib/python3.11/site-packages/torch/functional.py", line 1803, in norm
-    return torch.linalg.matrix_norm(input, p, _dim, keepdim, dtype=dtype)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-RuntimeError: linalg.matrix_norm: dim must be a 2-tuple. Got 1 2 3

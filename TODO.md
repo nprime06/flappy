@@ -597,3 +597,112 @@ These changes should be done separately before retraining:
 6) **Sanity checks** - To be verified after retraining:
    - [ ] Verify that `done` fires near actual crash frames in held-out episodes.
    - [ ] Ensure rollouts stop within 1–2 frames of true termination.
+
+---
+
+# 🔴 CRITICAL: Action Class Imbalance (Model Ignores Actions)
+
+**Status: NEEDS FIX BEFORE RETRAINING**
+
+## The Problem
+
+At 65 epochs, the world model performs poorly - bird doesn't follow physics, doesn't respond to player input. Investigation revealed:
+
+### Action Distribution Analysis
+```
+Total steps: 164,104
+Action 0 (no-flap): 155,173 (94.6%)
+Action 1 (flap):      8,931 (5.4%)
+```
+
+The training data is **severely imbalanced** - 17x more no-flap than flap samples.
+
+### Diagnostic: action_diff Test
+
+Added debug logging in `test_world.py` that computes how different the model's prediction is when using opposite actions:
+
+```python
+# Run same frame with action=0 vs action=1
+z_next_action0 = euler_sample(model, z_0, z_cond, action=0, ...)
+z_next_action1 = euler_sample(model, z_0, z_cond, action=1, ...)
+action_diff = torch.abs(z_next_action0 - z_next_action1).mean()
+```
+
+**Results:**
+```
+Frame 60:  action_diff=0.0131
+Frame 70:  action_diff=0.0161
+Frame 80:  action_diff=0.0096
+Frame 90:  action_diff=0.0302
+Frame 100: action_diff=0.0139
+```
+
+**action_diff ≈ 0.01-0.03** → Model produces nearly identical outputs regardless of action input!
+
+For comparison, `frame_diff` (difference between consecutive predicted frames) was ~0.17, so action_diff should be at least 0.1+ if the model were conditioning properly.
+
+### Root Cause
+
+With 94.6% of training data being action=0, the model learns to simply predict "what happens with no action" and essentially ignores the action conditioning input. The action embedding becomes a dead weight.
+
+## Proposed Fix: Loss Reweighting
+
+Instead of oversampling (which inflates dataset size and repeats data), use **loss reweighting** to make action=1 samples contribute more to the gradient:
+
+```python
+# In train_ngen.py, compute sample weights based on action
+action_weights = torch.where(
+    actions == 1,
+    torch.tensor(17.0, device=device),  # Upweight flap (minority)
+    torch.tensor(1.0, device=device)    # Normal weight for no-flap
+)
+
+# Apply per-sample weighting to flow loss
+flow_loss_per_sample = ((v_pred - v_target) ** 2).mean(dim=[1, 2, 3])
+weighted_flow_loss = (flow_loss_per_sample * action_weights).mean()
+```
+
+The weight of 17.0 corresponds to the imbalance ratio (155173 / 8931 ≈ 17.4).
+
+Alternatively, use focal-style weighting or dynamically compute weights per batch.
+
+## Other Fixes Applied
+
+### Frame Buffer Timing Bug (Fixed)
+
+The inference loop in `test_world.py` was updating the frame buffer AFTER sampling instead of BEFORE:
+
+```python
+# BUGGY (was):
+z_next = euler_sample(model, z_0, z_cond, ...)  # z_cond missing current frame!
+frame_buffer.pop(0)
+frame_buffer.append(z_display.clone())          # Added AFTER sampling
+
+# FIXED (now):
+frame_buffer.pop(0)
+frame_buffer.append(z_display.clone())          # Update FIRST
+z_cond = torch.cat(frame_buffer, dim=1)         # Now includes current frame
+z_next = euler_sample(model, z_0, z_cond, ...)  # Correct context
+```
+
+Same fix applied to `web/src/App.ts`.
+
+### Default aug_level Changed (Fixed)
+
+Changed default `aug_level` from 8 to 0 for cleaner inference (less noise on conditioning).
+
+## Verification After Fix
+
+After retraining with loss reweighting:
+1. **action_diff should increase** to 0.1+ (model predictions differ based on action)
+2. **Bird should respond to input** - jump when SPACE pressed, fall when idle
+3. **Smooth physics** - gravity pulls bird down, flap gives upward velocity
+
+## Files to Modify
+
+| File | Change |
+|------|--------|
+| `diffuse/ngen/train_ngen.py` | Add loss reweighting based on action |
+| `diffuse/ngen/loss.py` | Support per-sample weighted flow loss |
+
+---

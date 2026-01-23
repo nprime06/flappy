@@ -11,7 +11,7 @@ class TraceDataset(Dataset):
     No mixing between episodes.
     """
 
-    def __init__(self, vod_dir, k=4, include_done=False):
+    def __init__(self, vod_dir, k=4, include_done=False, balance_actions=False):
         import json
         self.k = k
         self.include_done = include_done
@@ -22,6 +22,9 @@ class TraceDataset(Dataset):
 
         # Build index: list of (frames_dir, step_idx, action, done) for valid samples
         self.samples = []
+        action_0_samples = []
+        action_1_samples = []
+
         for run_dir in Path(vod_dir).glob("*/*/"):
             frames_dir = run_dir / "frames"
             info_file = run_dir / "run_info.jsonl"
@@ -45,7 +48,28 @@ class TraceDataset(Dataset):
                 if step in actions:
                     # Fallback: last frame is done if not explicitly marked
                     done = done_flags.get(step, step == n_frames - 1)
-                    self.samples.append((frames_dir, step, actions[step], done))
+                    sample = (frames_dir, step, actions[step], done)
+                    self.samples.append(sample)
+
+                    # Track by action for balancing
+                    if actions[step] == 0:
+                        action_0_samples.append(sample)
+                    else:
+                        action_1_samples.append(sample)
+
+        # Balance actions by oversampling minority class
+        if balance_actions and len(action_0_samples) > 0 and len(action_1_samples) > 0:
+            n_action_0 = len(action_0_samples)
+            n_action_1 = len(action_1_samples)
+            print(f"Before balancing: action_0={n_action_0}, action_1={n_action_1}")
+
+            if n_action_1 < n_action_0:
+                # Oversample action=1 to match action=0
+                oversample_factor = n_action_0 // n_action_1
+                extra_samples = action_1_samples * (oversample_factor - 1)
+                self.samples.extend(extra_samples)
+                print(f"After balancing: {len(self.samples)} total samples "
+                      f"(added {len(extra_samples)} action=1 samples, {oversample_factor}x oversample)")
 
     def __len__(self):
         return len(self.samples)

@@ -236,13 +236,17 @@ export class App {
       throw new Error('Not initialized');
     }
 
+    // Update frame buffer FIRST to include current frame in context
+    // This is critical: we predict the NEXT frame, so context must include current frame
+    this.frameBuffer.push(this.currentLatent);
+
     // Generate starting noise (perturbation from current frame)
     const z0 = this.sampler.generatePerturbedNoise(
       this.currentLatent,
       this.config.noiseScale
     );
 
-    // Get conditioning from frame buffer
+    // Get conditioning from frame buffer (now includes currentLatent)
     const zCond = this.frameBuffer.getConcatenated();
 
     // Sample next frame
@@ -264,9 +268,6 @@ export class App {
     if (doneProb !== null && doneProb > this.config.doneThreshold) {
       this.handleGameOver(doneProb);
     }
-
-    // Update frame buffer (push current before updating)
-    this.frameBuffer.push(this.currentLatent);
 
     // Update current latent
     this.currentLatent = zNext;
