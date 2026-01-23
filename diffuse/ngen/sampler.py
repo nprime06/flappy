@@ -30,7 +30,6 @@ def euler_sample(model, z_0, z_cond, action, aug_level, num_steps=50):
         t = torch.full((B,), (i + 0.5) * dt, device=device)  # Midpoint rule
         v = model(z, t, c=action, z_cond=z_cond, aug_level=aug_level)
         z = z + v * dt
-        z = torch.clamp(z, -3.0, 3.0)  # Keep in ~3 std of normalized distribution
 
     return z
 
@@ -62,7 +61,6 @@ def euler_sample_backward(model, z_1, z_cond, action, aug_level, num_steps=50):
         t = torch.full((B,), 1.0 - (i + 0.5) * dt, device=device)  # Midpoint rule
         v = model(z, t, c=action, z_cond=z_cond, aug_level=aug_level)
         z = z - v * dt  # subtract (backward direction)
-        z = torch.clamp(z, -3.0, 3.0)  # Keep in ~3 std of normalized distribution
 
     return z
 
@@ -100,7 +98,6 @@ def euler_sample_cfg(model, z_0, z_cond, action, aug_level, cfg_scale=1.5, num_s
         v = v_uncond + cfg_scale * (v_cond - v_uncond)
 
         z = z + v * dt
-        z = torch.clamp(z, -3.0, 3.0)  # Keep in ~3 std of normalized distribution
 
     return z
 

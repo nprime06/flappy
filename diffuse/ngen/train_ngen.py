@@ -212,6 +212,14 @@ def train(run_dir=None, reflow_checkpoint=None):
     latest_ckpt_path = os.path.join(checkpoint_dir, "latest.pt")
     config_path = os.path.join(run_dir, "config.json")
 
+    # Load reflow_checkpoint from config.json if resuming and not provided
+    if reflow_checkpoint is None and os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            saved_config = json.load(f)
+            reflow_checkpoint = saved_config.get("reflow_checkpoint")
+            if reflow_checkpoint and is_main:
+                print(f"Loaded reflow_checkpoint from config: {reflow_checkpoint}")
+
     if is_main:
         print(f"Run directory: {run_dir}")
         # Save config
