@@ -4,13 +4,26 @@ from .embedding import TimeEmbedding
 from .resblock import ResBlock, DownResBlock, UpResBlock
 
 class ResUNet(nn.Module):
-    def __init__(self, in_channels, hidden_channels, num_layers, embed_dim, out_channels=None, num_classes=0, context_channels=0, num_aug_bins=0, use_done_head=False):
+    def __init__(self, in_channels, hidden_channels, num_layers, embed_dim, out_channels=None, num_classes=0, context_channels=0, num_aug_bins=0, use_done_head=False, context_actions=0):
         super().__init__()
         self.context_channels = context_channels
+        self.context_actions = context_actions
         self.use_done_head = use_done_head
         self.time_embedding = TimeEmbedding(embed_dim=embed_dim)
         self.class_embedding = nn.Embedding(num_classes + 1, embed_dim) if num_classes > 0 else None
         self.aug_embedding = nn.Embedding(num_aug_bins, embed_dim) if num_aug_bins > 0 else None
+
+        # Action history embedding: embed past k actions and project to embed_dim
+        if context_actions > 0 and num_classes > 0:
+            action_embed_dim = 16  # Embed dimension per action
+            self.action_history_embed = nn.Embedding(num_classes, action_embed_dim)
+            self.action_history_proj = nn.Sequential(
+                nn.Linear(context_actions * action_embed_dim, embed_dim),
+                nn.SiLU(),
+            )
+        else:
+            self.action_history_embed = None
+            self.action_history_proj = None
 
         # down: (in + context) -> h, h -> 2h, ... 2**(num_layers - 2)h -> 2**(num_layers - 1)h
         down_blocks_list = [DownResBlock(in_channels + context_channels, hidden_channels, embed_dim)]
@@ -41,14 +54,22 @@ class ResUNet(nn.Module):
                 nn.Linear(64, 1),
             )
 
-    def forward(self, x, t, c=None, z_cond=None, aug_level=None, return_done=False):
-        # x: (B, C, H, W), t: (B,), c: (B,), z_cond: (B, context_channels, H, W), aug_level: (B,)
+    def forward(self, x, t, c=None, past_actions=None, z_cond=None, aug_level=None, return_done=False):
+        # x: (B, C, H, W), t: (B,), c: (B,), past_actions: (B, k), z_cond: (B, context_channels, H, W), aug_level: (B,)
         if z_cond is not None:
             x = torch.cat([x, z_cond], dim=1)
 
         t_emb = self.time_embedding(t)
         c_emb = self.class_embedding(c) if self.class_embedding is not None and c is not None else None
         aug_emb = self.aug_embedding(aug_level) if self.aug_embedding is not None and aug_level is not None else None
+
+        # Embed past action history and add to time embedding
+        if self.action_history_embed is not None and past_actions is not None:
+            # past_actions: (B, k) -> embed -> (B, k, action_embed_dim) -> flatten -> (B, k*action_embed_dim)
+            past_action_emb = self.action_history_embed(past_actions)  # (B, k, 16)
+            past_action_emb = past_action_emb.flatten(1)  # (B, k*16)
+            past_action_emb = self.action_history_proj(past_action_emb)  # (B, embed_dim)
+            t_emb = t_emb + past_action_emb
 
         skip_connections = []
         for down_block in self.down_blocks:

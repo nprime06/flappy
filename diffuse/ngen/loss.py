@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 
 
-def flow_matching_loss(model, z_target, z_cond, action, aug_level, z_0=None,
+def flow_matching_loss(model, z_target, z_cond, past_actions, action, aug_level, z_0=None,
                        done_labels=None, done_loss_weight=0.1, action_weight=1.0):
     """
     Compute flow matching loss with optional done head loss.
@@ -13,7 +13,8 @@ def flow_matching_loss(model, z_target, z_cond, action, aug_level, z_0=None,
         model: Flow model that predicts velocity
         z_target: Target latent (B, C, H, W)
         z_cond: Conditioning latents (B, k*C, H, W)
-        action: Action indices (B,)
+        past_actions: Past k action indices (B, k)
+        action: Current action indices (B,)
         aug_level: Augmentation level indices (B,)
         z_0: Starting noise. If None, sample from N(0,1).
              For reflow, this is the noise paired with z_target.
@@ -44,10 +45,11 @@ def flow_matching_loss(model, z_target, z_cond, action, aug_level, z_0=None,
 
     # Predict velocity (and optionally done logit)
     if done_labels is not None:
-        v_pred, done_logit = model(z_t, t, c=action, z_cond=z_cond,
-                                    aug_level=aug_level, return_done=True)
+        v_pred, done_logit = model(z_t, t, c=action, past_actions=past_actions,
+                                    z_cond=z_cond, aug_level=aug_level, return_done=True)
     else:
-        v_pred = model(z_t, t, c=action, z_cond=z_cond, aug_level=aug_level)
+        v_pred = model(z_t, t, c=action, past_actions=past_actions,
+                       z_cond=z_cond, aug_level=aug_level)
 
     # MSE loss for flow matching (per-sample, then weighted)
     mse_per_sample = ((v_pred - v_target) ** 2).mean(dim=[1, 2, 3])  # (B,)

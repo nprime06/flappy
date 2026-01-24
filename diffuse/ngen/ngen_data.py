@@ -5,10 +5,17 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 
 class TraceDataset(Dataset):
-    """Dataset that returns (past_k_frames, current_frame, action, [done]) for world model training.
+    """Dataset that returns (past_k_frames, current_frame, past_actions, action, [done]) for world model training.
 
     Each episode is independent: samples start from step k (k+1th frame) and go to the end.
     No mixing between episodes.
+
+    Returns:
+        past_frames: (k, C, H, W) tensor of past k frames
+        current_frame: (C, H, W) tensor of current frame
+        past_actions: (k,) tensor of past k actions (actions that produced past k frames)
+        action: scalar tensor of current action
+        done: (optional) scalar tensor indicating episode termination
     """
 
     def __init__(self, vod_dir, k=4, include_done=False, balance_actions=False):
@@ -24,6 +31,9 @@ class TraceDataset(Dataset):
         self.samples = []
         action_0_samples = []
         action_1_samples = []
+
+        # Store actions dict per episode for looking up past actions
+        self.episode_actions = {}
 
         for run_dir in Path(vod_dir).glob("*/*/"):
             frames_dir = run_dir / "frames"
@@ -41,6 +51,9 @@ class TraceDataset(Dataset):
                         actions[rec["step"]] = rec["action"]
                         # Check for termination or truncation flags
                         done_flags[rec["step"]] = rec.get("terminated", False) or rec.get("truncated", False)
+
+            # Store actions dict for this episode (keyed by frames_dir path)
+            self.episode_actions[str(frames_dir)] = actions
 
             # Valid samples: steps where we have k prior frames within the same episode
             n_frames = len(list(frames_dir.glob("*.png")))
@@ -88,20 +101,32 @@ class TraceDataset(Dataset):
             past.append(self.transform(frame))
         past = torch.stack(past)  # (k, C, H, W)
 
+        # Load past k actions (actions that produced the past k frames)
+        # Note: action at step i produces frame at step i+1
+        # So past_actions[j] is the action taken BEFORE frame past[j]
+        actions_dict = self.episode_actions[str(frames_dir)]
+        past_actions = []
+        for i in range(step - self.k, step):
+            # Action at step i-1 produces frame i, so we want actions i-1 through step-2
+            # But actually, let's use actions at steps (step-k) through (step-1)
+            # These are the actions taken during the past k frames
+            past_actions.append(actions_dict.get(i, 0))  # 0 = no-flap default
+        past_actions = torch.tensor(past_actions, dtype=torch.long)  # (k,)
+
         if self.include_done:
-            return past, current, torch.tensor(action, dtype=torch.long), torch.tensor(done, dtype=torch.float)
-        return past, current, torch.tensor(action, dtype=torch.long)
+            return past, current, past_actions, torch.tensor(action, dtype=torch.long), torch.tensor(done, dtype=torch.float)
+        return past, current, past_actions, torch.tensor(action, dtype=torch.long)
 
 
 if __name__ == "__main__":
     dataset = TraceDataset("/Users/william/Desktop/Random/flappy/vod")
     print(f"Dataset size: {len(dataset)}")
-    past, current, action = next(iter(DataLoader(dataset, batch_size=32, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)))
-    print(f"Past shape: {past.shape}")
-    print(f"Current shape: {current.shape}")
+    past, current, past_actions, action = next(iter(DataLoader(dataset, batch_size=32, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)))
+    print(f"Past frames shape: {past.shape}")
+    print(f"Current frame shape: {current.shape}")
+    print(f"Past actions shape: {past_actions.shape}")
     print(f"Action shape: {action.shape}")
-    print(f"Value range: [{past.min():.2f}, {past.max():.2f}]")
-    print(f"Value range: [{current.min():.2f}, {current.max():.2f}]")
-    print(f"Value range: [{action.min():.2f}, {action.max():.2f}]")
-
-    print(f"Values: ", action)
+    print(f"Past frames range: [{past.min():.2f}, {past.max():.2f}]")
+    print(f"Current frame range: [{current.min():.2f}, {current.max():.2f}]")
+    print(f"Past actions: {past_actions[0]}")  # Show first sample's past actions
+    print(f"Current action: {action[0]}")

@@ -4,7 +4,7 @@ import torch
 
 
 @torch.no_grad()
-def euler_sample(model, z_0, z_cond, action, aug_level, num_steps=50):
+def euler_sample(model, z_0, z_cond, past_actions, action, aug_level, num_steps=50, clamp_range=4.0):
     """
     Sample from flow model using Euler ODE solver (forward: t=0 → t=1).
 
@@ -14,9 +14,11 @@ def euler_sample(model, z_0, z_cond, action, aug_level, num_steps=50):
         model: Flow model predicting velocity
         z_0: Starting noise (B, C, H, W)
         z_cond: Conditioning latents (B, k*C, H, W)
-        action: Action indices (B,)
+        past_actions: Past k action indices (B, k)
+        action: Current action indices (B,)
         aug_level: Augmentation level indices (B,)
         num_steps: Number of Euler steps
+        clamp_range: Clamp latents to [-clamp_range, clamp_range] to prevent drift
 
     Returns:
         z_1: Final sample at t=1 (B, C, H, W)
@@ -28,14 +30,17 @@ def euler_sample(model, z_0, z_cond, action, aug_level, num_steps=50):
     z = z_0
     for i in range(num_steps):
         t = torch.full((B,), (i + 0.5) * dt, device=device)  # Midpoint rule
-        v = model(z, t, c=action, z_cond=z_cond, aug_level=aug_level)
+        v = model(z, t, c=action, past_actions=past_actions, z_cond=z_cond, aug_level=aug_level)
         z = z + v * dt
+        # Clamp to prevent latent drift during autoregressive generation
+        if clamp_range > 0:
+            z = torch.clamp(z, -clamp_range, clamp_range)
 
     return z
 
 
 @torch.no_grad()
-def euler_sample_backward(model, z_1, z_cond, action, aug_level, num_steps=50):
+def euler_sample_backward(model, z_1, z_cond, past_actions, action, aug_level, num_steps=50, clamp_range=4.0):
     """
     Infer z_0 from z_1 by integrating ODE backward (t=1 → t=0).
 
@@ -45,9 +50,11 @@ def euler_sample_backward(model, z_1, z_cond, action, aug_level, num_steps=50):
         model: Flow model predicting velocity
         z_1: Data point at t=1 (B, C, H, W)
         z_cond: Conditioning latents (B, k*C, H, W)
-        action: Action indices (B,)
+        past_actions: Past k action indices (B, k)
+        action: Current action indices (B,)
         aug_level: Augmentation level indices (B,)
         num_steps: Number of Euler steps
+        clamp_range: Clamp latents to [-clamp_range, clamp_range] to prevent drift
 
     Returns:
         z_0: Inferred noise at t=0 (B, C, H, W)
@@ -59,14 +66,17 @@ def euler_sample_backward(model, z_1, z_cond, action, aug_level, num_steps=50):
     z = z_1
     for i in range(num_steps):
         t = torch.full((B,), 1.0 - (i + 0.5) * dt, device=device)  # Midpoint rule
-        v = model(z, t, c=action, z_cond=z_cond, aug_level=aug_level)
+        v = model(z, t, c=action, past_actions=past_actions, z_cond=z_cond, aug_level=aug_level)
         z = z - v * dt  # subtract (backward direction)
+        # Clamp to prevent latent drift
+        if clamp_range > 0:
+            z = torch.clamp(z, -clamp_range, clamp_range)
 
     return z
 
 
 @torch.no_grad()
-def euler_sample_cfg(model, z_0, z_cond, action, aug_level, cfg_scale=1.5, num_steps=50):
+def euler_sample_cfg(model, z_0, z_cond, past_actions, action, aug_level, cfg_scale=1.5, num_steps=50, clamp_range=4.0):
     """
     Sample from flow model using Euler ODE solver with Classifier-Free Guidance.
 
@@ -76,10 +86,12 @@ def euler_sample_cfg(model, z_0, z_cond, action, aug_level, cfg_scale=1.5, num_s
         model: Flow model predicting velocity
         z_0: Starting noise (B, C, H, W)
         z_cond: Conditioning latents (B, k*C, H, W)
-        action: Action indices (B,)
+        past_actions: Past k action indices (B, k)
+        action: Current action indices (B,)
         aug_level: Augmentation level indices (B,)
         cfg_scale: Classifier-free guidance scale (1.0 = no guidance)
         num_steps: Number of Euler steps
+        clamp_range: Clamp latents to [-clamp_range, clamp_range] to prevent drift
 
     Returns:
         z_1: Final sample at t=1 (B, C, H, W)
@@ -93,11 +105,14 @@ def euler_sample_cfg(model, z_0, z_cond, action, aug_level, cfg_scale=1.5, num_s
     for i in range(num_steps):
         t = torch.full((B,), (i + 0.5) * dt, device=device)  # Midpoint rule
 
-        v_cond = model(z, t, c=action, z_cond=z_cond, aug_level=aug_level)
-        v_uncond = model(z, t, c=action, z_cond=z_cond_null, aug_level=aug_level)
+        v_cond = model(z, t, c=action, past_actions=past_actions, z_cond=z_cond, aug_level=aug_level)
+        v_uncond = model(z, t, c=action, past_actions=past_actions, z_cond=z_cond_null, aug_level=aug_level)
         v = v_uncond + cfg_scale * (v_cond - v_uncond)
 
         z = z + v * dt
+        # Clamp to prevent latent drift during autoregressive generation
+        if clamp_range > 0:
+            z = torch.clamp(z, -clamp_range, clamp_range)
 
     return z
 
@@ -131,20 +146,21 @@ class ReflowPairGenerator:
         self.num_steps = num_steps
         self.model.eval()
 
-    def generate(self, z_1, z_cond, action, aug_level):
+    def generate(self, z_1, z_cond, past_actions, action, aug_level):
         """
         Infer z_0 from real data z_1 by flowing backward.
 
         Args:
             z_1: Real data latent (B, C, H, W)
             z_cond: Conditioning latents (B, k*C, H, W)
-            action: Action indices (B,)
+            past_actions: Past k action indices (B, k)
+            action: Current action indices (B,)
             aug_level: Augmentation level indices (B,)
 
         Returns:
             z_0: Inferred noise (B, C, H, W)
         """
         return euler_sample_backward(
-            self.model, z_1, z_cond, action, aug_level,
+            self.model, z_1, z_cond, past_actions, action, aug_level,
             num_steps=self.num_steps
         )

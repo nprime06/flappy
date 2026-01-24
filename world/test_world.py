@@ -47,6 +47,7 @@ def load_flow_model(checkpoint_path, device):
         context_channels=cfg["context_frames"] * cfg["in_channels"],
         num_aug_bins=cfg["num_aug_bins"],
         use_done_head=cfg.get("use_done_head", False),
+        context_actions=cfg.get("context_actions", 0),
     ).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
@@ -127,8 +128,8 @@ def main():
                         help="Number of Euler steps for sampling (match training)")
     parser.add_argument("--scale", type=int, default=2,
                         help="Display scale factor")
-    parser.add_argument("--noise-scale", type=float, default=0.1,
-                        help="Scale of noise perturbation for z_0 (0 = pure noise, small = perturbation)")
+    parser.add_argument("--noise-scale", type=float, default=0.0,
+                        help="Scale of noise perturbation for z_0 (0 = pure noise from N(0,1), >0 = perturbation from current)")
     parser.add_argument("--aug-level", type=int, default=0,
                         help="Augmentation level at inference (0-15, 0 = no noise on z_cond)")
     parser.add_argument("--smoothing", type=float, default=0.0,
@@ -219,11 +220,18 @@ def main():
     frame_buffer = [z_cond[:, i*model_cfg["in_channels"]:(i+1)*model_cfg["in_channels"]]
                     for i in range(k)]
 
+    # Action buffer: list of k past actions for conditioning
+    # Initialize with k no-flap actions (0)
+    action_buffer = [0] * k
+
     # Current latent (the frame we display)
     z_display = z_current
 
     # aug_level: use median level at inference for stability
     aug_level = torch.full((1,), args.aug_level, dtype=torch.long, device=device)
+
+    # Check if model uses action history conditioning
+    uses_action_history = model_cfg.get("context_actions", 0) > 0
 
     running = True
     frame_count = 0
@@ -256,13 +264,23 @@ def main():
         frame_buffer.pop(0)
         frame_buffer.append(z_display.clone())
 
+        # Update action buffer BEFORE sampling (just like frame buffer)
+        action_buffer.pop(0)
+        action_buffer.append(action)
+
         # Prepare conditioning (now includes z_display)
         z_cond = torch.cat(frame_buffer, dim=1)  # (1, k*latent_ch, H', W')
         action_tensor = torch.tensor([action], dtype=torch.long, device=device)
 
+        # Prepare past actions tensor (if model uses action history)
+        if uses_action_history:
+            past_actions = torch.tensor([action_buffer], dtype=torch.long, device=device)  # (1, k)
+        else:
+            past_actions = None
+
         # Sample next frame using flow model
         with torch.no_grad():
-            # Use perturbation from current frame instead of pure noise
+            # Use pure noise (correct for flow matching) or perturbation if specified
             if args.noise_scale > 0:
                 z_0 = z_display + args.noise_scale * torch.randn_like(z_display)
             else:
@@ -271,12 +289,12 @@ def main():
             # Use CFG if enabled
             if args.use_cfg:
                 z_next = euler_sample_cfg(
-                    flow_model, z_0, z_cond, action_tensor, aug_level,
+                    flow_model, z_0, z_cond, past_actions, action_tensor, aug_level,
                     cfg_scale=args.cfg_scale, num_steps=args.num_steps
                 )
             else:
                 z_next = euler_sample(
-                    flow_model, z_0, z_cond, action_tensor, aug_level,
+                    flow_model, z_0, z_cond, past_actions, action_tensor, aug_level,
                     num_steps=args.num_steps
                 )
 
@@ -287,8 +305,8 @@ def main():
             # Check done prediction if model has done head
             if hasattr(flow_model, 'use_done_head') and flow_model.use_done_head:
                 t_final = torch.ones(1, device=device)
-                _, done_logit = flow_model(z_next, t_final, c=action_tensor, z_cond=z_cond,
-                                           aug_level=aug_level, return_done=True)
+                _, done_logit = flow_model(z_next, t_final, c=action_tensor, past_actions=past_actions,
+                                           z_cond=z_cond, aug_level=aug_level, return_done=True)
                 done_prob = torch.sigmoid(done_logit).item()
                 if done_prob > args.done_threshold:
                     print(f"Game Over! (done_prob={done_prob:.2f})")
@@ -302,7 +320,7 @@ def main():
                 alt_action = 1 - action
                 alt_action_tensor = torch.tensor([alt_action], dtype=torch.long, device=device)
                 z_next_alt = euler_sample(
-                    flow_model, z_0, z_cond, alt_action_tensor, aug_level,
+                    flow_model, z_0, z_cond, past_actions, alt_action_tensor, aug_level,
                     num_steps=args.num_steps
                 )
                 action_diff = torch.abs(z_next - z_next_alt).mean().item()

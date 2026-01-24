@@ -58,6 +58,7 @@ model_config = {
     "embed_dim": 128,
     "num_classes": 2,           # flappy bird: 0=no-flap, 1=flap
     "context_frames": 8,        # k past frames (increased from 2)
+    "context_actions": 8,       # k past actions (same as context_frames)
     "num_aug_bins": 16,
     "cfg_dropout_prob": 0.1,    # CFG: zero out conditioning 10% of time
     "use_done_head": True,      # Enable termination detection head
@@ -112,6 +113,7 @@ def load_flow_model(checkpoint_path, device):
         num_classes=cfg["num_classes"],
         context_channels=cfg["context_frames"] * cfg["in_channels"],
         num_aug_bins=cfg["num_aug_bins"],
+        context_actions=cfg.get("context_actions", 0),  # For backward compatibility
     ).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
@@ -167,6 +169,7 @@ def train(run_dir=None, reflow_checkpoint=None):
         context_channels=model_config["context_frames"] * model_config["in_channels"],
         num_aug_bins=model_config["num_aug_bins"],
         use_done_head=model_config.get("use_done_head", False),
+        context_actions=model_config.get("context_actions", 0),
     ).to(device)
 
     if is_main:
@@ -308,15 +311,17 @@ def train(run_dir=None, reflow_checkpoint=None):
 
         for batch in dataloader:
             # Unpack batch (with or without done labels)
+            # Dataset now returns: past_frames, current_frame, past_actions, action, [done]
             if use_done_head:
-                past_frames, current_frame, action, done_labels = batch
+                past_frames, current_frame, past_actions, action, done_labels = batch
                 done_labels = done_labels.to(device)
             else:
-                past_frames, current_frame, action = batch
+                past_frames, current_frame, past_actions, action = batch
                 done_labels = None
 
             past_frames = past_frames.to(device)
             current_frame = current_frame.to(device)
+            past_actions = past_actions.to(device)
             action = action.to(device)
 
             B, k = past_frames.shape[:2]
@@ -344,7 +349,7 @@ def train(run_dir=None, reflow_checkpoint=None):
             # Get z_0 (either from N(0,1) or from reflow generator)
             if reflow_generator is not None:
                 # Reflow: infer z_0 from real z_target by flowing backward
-                z_0 = reflow_generator.generate(z_target, z_cond, action, aug_level)
+                z_0 = reflow_generator.generate(z_target, z_cond, past_actions, action, aug_level)
                 # z_target stays as real data
             else:
                 z_0 = None  # Will sample from N(0,1) in loss function
@@ -352,7 +357,7 @@ def train(run_dir=None, reflow_checkpoint=None):
             # Compute loss (with bfloat16 for speed)
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 loss, info = flow_matching_loss(
-                    model, z_target, z_cond, action, aug_level, z_0=z_0,
+                    model, z_target, z_cond, past_actions, action, aug_level, z_0=z_0,
                     done_labels=done_labels, done_loss_weight=done_loss_weight,
                     action_weight=action_weight
                 )
