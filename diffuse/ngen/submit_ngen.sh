@@ -6,6 +6,7 @@
 #   ./submit_ngen.sh --gpus 4                  # New run, 4 GPUs
 #   ./submit_ngen.sh --run-dir /path/to/run    # Resume existing run (use full absolute path)
 #   ./submit_ngen.sh --reflow /path/to/ckpt    # Reflow training
+#   ./submit_ngen.sh --latent-vod /path/to/latent-vod  # Use pre-computed latents (faster)
 #   ./submit_ngen.sh --gpus 4 --run-dir /path  # Resume with 4 GPUs (use full absolute path)
 
 set -euo pipefail
@@ -14,6 +15,7 @@ set -euo pipefail
 NUM_GPUS=1
 RUN_DIR=""
 REFLOW=""
+LATENT_VOD=""
 TIME="6:00:00"
 
 # Parse arguments
@@ -31,13 +33,17 @@ while [[ $# -gt 0 ]]; do
             REFLOW="$2"
             shift 2
             ;;
+        --latent-vod)
+            LATENT_VOD="$2"
+            shift 2
+            ;;
         --time)
             TIME="$2"
             shift 2
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--gpus N] [--run-dir DIR] [--reflow CKPT] [--time HH:MM:SS]"
+            echo "Usage: $0 [--gpus N] [--run-dir DIR] [--reflow CKPT] [--latent-vod DIR] [--time HH:MM:SS]"
             exit 1
             ;;
     esac
@@ -67,6 +73,9 @@ TRAIN_ARGS="--run-dir $RUN_DIR"
 if [[ -n "$REFLOW" ]]; then
     TRAIN_ARGS="$TRAIN_ARGS --reflow $REFLOW"
 fi
+if [[ -n "$LATENT_VOD" ]]; then
+    TRAIN_ARGS="$TRAIN_ARGS --latent-vod $LATENT_VOD"
+fi
 
 echo "Submitting NGEN training job:"
 echo "  GPUs: $NUM_GPUS"
@@ -76,6 +85,9 @@ echo "  Time: $TIME"
 echo "  Run dir: $RUN_DIR"
 if [[ -n "$REFLOW" ]]; then
     echo "  Reflow: $REFLOW"
+fi
+if [[ -n "$LATENT_VOD" ]]; then
+    echo "  Latent VOD: $LATENT_VOD"
 fi
 
 # Submit job with dynamic resource allocation

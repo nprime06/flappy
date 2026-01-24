@@ -20,6 +20,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nn.ae import VAE
 from nn.resunet import ResUNet
 from ngen.ngen_data import TraceDataset
+from ngen.latent_data import LatentTraceDataset
 from ngen.loss import flow_matching_loss
 from ngen.sampler import ReflowPairGenerator
 
@@ -130,7 +131,7 @@ def vae_encode(vae, x, latent_mean, latent_std):
     return z
 
 
-def train(run_dir=None, reflow_checkpoint=None):
+def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
     """
     Train flow matching model with optional DDP support.
 
@@ -138,16 +139,24 @@ def train(run_dir=None, reflow_checkpoint=None):
         run_dir: Directory to save checkpoints (None = create new)
         reflow_checkpoint: Path to pre-trained model for reflow training.
                           If None, use standard flow matching (z_0 ~ N(0,1)).
+        latent_vod: Path to pre-computed latent VOD directory.
+                   If provided, skips VAE encoding (data is already latents).
     """
     # Setup DDP (works for single GPU too)
     rank, local_rank, world_size, device = setup_ddp()
     is_main = is_main_process(rank)
 
-    # Load frozen VAE (not wrapped in DDP - inference only)
-    if is_main:
-        print(f"Loading VAE from {train_config['vae_checkpoint']}")
-    vae = load_vae(train_config["vae_checkpoint"], device)
-    # vae.encoder = torch.compile(vae.encoder)  # Disabled: causes OOM on multi-GPU DDP
+    # Load frozen VAE only if not using pre-computed latents
+    vae = None
+    if latent_vod is None:
+        if is_main:
+            print(f"Loading VAE from {train_config['vae_checkpoint']}")
+        vae = load_vae(train_config["vae_checkpoint"], device)
+        # vae.encoder = torch.compile(vae.encoder)  # Disabled: causes OOM on multi-GPU DDP
+    else:
+        if is_main:
+            print(f"Using pre-computed latents from {latent_vod}")
+            print("VAE loading skipped (not needed for latent mode)")
 
     # Load reflow model if specified (not wrapped in DDP - inference only)
     reflow_generator = None
@@ -215,13 +224,18 @@ def train(run_dir=None, reflow_checkpoint=None):
     latest_ckpt_path = os.path.join(checkpoint_dir, "latest.pt")
     config_path = os.path.join(run_dir, "config.json")
 
-    # Load reflow_checkpoint from config.json if resuming and not provided
-    if reflow_checkpoint is None and os.path.exists(config_path):
+    # Load reflow_checkpoint and latent_vod from config.json if resuming and not provided
+    if os.path.exists(config_path):
         with open(config_path, "r") as f:
             saved_config = json.load(f)
-            reflow_checkpoint = saved_config.get("reflow_checkpoint")
-            if reflow_checkpoint and is_main:
-                print(f"Loaded reflow_checkpoint from config: {reflow_checkpoint}")
+            if reflow_checkpoint is None:
+                reflow_checkpoint = saved_config.get("reflow_checkpoint")
+                if reflow_checkpoint and is_main:
+                    print(f"Loaded reflow_checkpoint from config: {reflow_checkpoint}")
+            if latent_vod is None:
+                latent_vod = saved_config.get("latent_vod")
+                if latent_vod and is_main:
+                    print(f"Loaded latent_vod from config: {latent_vod}")
 
     if is_main:
         print(f"Run directory: {run_dir}")
@@ -231,6 +245,7 @@ def train(run_dir=None, reflow_checkpoint=None):
                 "model_config": model_config,
                 "train_config": train_config,
                 "reflow_checkpoint": reflow_checkpoint,
+                "latent_vod": latent_vod,
             }
             with open(config_path, "w") as f:
                 json.dump(config, f, indent=2)
@@ -255,7 +270,10 @@ def train(run_dir=None, reflow_checkpoint=None):
 
     # Setup data with DistributedSampler for multi-GPU
     include_done = model_config.get("use_done_head", False)
-    dataset = TraceDataset(train_config["data_dir"], k=model_config["context_frames"], include_done=include_done)
+    if latent_vod is not None:
+        dataset = LatentTraceDataset(latent_vod, k=model_config["context_frames"], include_done=include_done)
+    else:
+        dataset = TraceDataset(train_config["data_dir"], k=model_config["context_frames"], include_done=include_done)
 
     if world_size > 1:
         sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
@@ -326,15 +344,23 @@ def train(run_dir=None, reflow_checkpoint=None):
 
             B, k = past_frames.shape[:2]
 
-            # Encode through frozen VAE (with bfloat16 for speed)
-            # NOTE: VAE encoding is a bottleneck - each GPU encodes independently.
-            # With multi-GPU, total encoding work stays the same but DDP overhead adds cost.
-            # Consider caching encoded latents or using torch.compile if memory allows.
-            with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                z_target = vae_encode(vae, current_frame, latent_mean, latent_std)
-                past_flat = past_frames.flatten(0, 1)
-                z_cond = vae_encode(vae, past_flat, latent_mean, latent_std)
-                z_cond = z_cond.unflatten(0, (B, k)).flatten(1, 2)
+            # Get latents: either from pre-computed data or by encoding through VAE
+            if latent_vod is not None:
+                # Data is already pre-computed normalized latents
+                # past_frames is past_latents: (B, k, 4, H', W')
+                # current_frame is current_latent: (B, 4, H', W')
+                z_target = current_frame  # Already normalized latent
+                z_cond = past_frames.flatten(1, 2)  # (B, k*4, H', W')
+            else:
+                # Encode through frozen VAE (with bfloat16 for speed)
+                # NOTE: VAE encoding is a bottleneck - each GPU encodes independently.
+                # With multi-GPU, total encoding work stays the same but DDP overhead adds cost.
+                # Consider caching encoded latents or using torch.compile if memory allows.
+                with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    z_target = vae_encode(vae, current_frame, latent_mean, latent_std)
+                    past_flat = past_frames.flatten(0, 1)
+                    z_cond = vae_encode(vae, past_flat, latent_mean, latent_std)
+                    z_cond = z_cond.unflatten(0, (B, k)).flatten(1, 2)
 
             # Noise augmentation on conditioning
             aug_level = torch.randint(0, num_aug_bins, (B,), device=device)
@@ -436,5 +462,7 @@ if __name__ == "__main__":
                         help="Run directory to resume from (creates new if not specified)")
     parser.add_argument("--reflow", type=str, default=None,
                         help="Path to pre-trained model checkpoint for reflow training")
+    parser.add_argument("--latent-vod", type=str, default=None,
+                        help="Path to pre-computed latent VOD directory (skips VAE encoding)")
     args = parser.parse_args()
-    train(run_dir=args.run_dir, reflow_checkpoint=args.reflow)
+    train(run_dir=args.run_dir, reflow_checkpoint=args.reflow, latent_vod=args.latent_vod)

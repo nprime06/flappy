@@ -159,3 +159,4 @@ frames/
 vod/
 trained_model/
 runs/
+latent-vod/
