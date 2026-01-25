@@ -12,8 +12,8 @@ class Encoder(nn.Module):
 
     def forward(self, x): # x: (B, image_channels, H, W) -> (B, 2*latent_channels, H', W')
         for down_block in self.down_blocks:
-            x = down_block(x, t_emb=None, c_emb=None, get_skip=False)
-        x = self.out_block(x, t_emb=None, c_emb=None)
+            x = down_block(x, get_skip=False)
+        x = self.out_block(x)
         return x
 
 
@@ -29,29 +29,21 @@ class Decoder(nn.Module):
         self.out_block = nn.Conv2d(hidden_channels, image_channels, kernel_size=1)
 
     def forward(self, z): # z: (B, latent_channels, H', W') -> (B, image_channels, H, W)
-        x = self.in_block(z, t_emb=None, c_emb=None)
+        x = self.in_block(z)
         for up_block in self.up_blocks:
-            x = up_block(x, skip=None, t_emb=None, c_emb=None)
+            x = up_block(x, skip=None)
         x = self.out_block(x)
         return torch.tanh(x)
 
 
 class VAE(nn.Module):
-    def __init__(
-        self,
-        image_channels,
-        hidden_channels,
-        latent_channels,
-        num_layers,
-        decoder_hidden_channels=None,
-        decoder_num_layers=None,
-    ):
+    def __init__(self, image_channels, hidden_channels, latent_channels, num_layers, decoder_hidden_channels=None, decoder_num_layers=None):
         super().__init__()
-        dec_hidden = decoder_hidden_channels if decoder_hidden_channels is not None else hidden_channels
-        dec_layers = decoder_num_layers if decoder_num_layers is not None else num_layers
+        decoder_hidden = decoder_hidden_channels if decoder_hidden_channels is not None else hidden_channels
+        decoder_layers = decoder_num_layers if decoder_num_layers is not None else num_layers
 
         self.encoder = Encoder(image_channels, hidden_channels, latent_channels, num_layers)
-        self.decoder = Decoder(latent_channels, dec_hidden, image_channels, dec_layers)
+        self.decoder = Decoder(latent_channels, decoder_hidden, image_channels, decoder_layers)
 
     def reparameterize(self, encoded, sample=False): # encoded: (B, 2*latent_channels, H', W')
         mean, logvar = encoded.chunk(2, dim=1)
