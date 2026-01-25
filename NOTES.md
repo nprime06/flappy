@@ -3,6 +3,12 @@ If you are claude or cursor, don't edit this file!
 Personal notes for what I will need to do later on to clean up the codebase. 
 
 
+Refactor/cleanup 1/24: 
+- cleaned up stupid ass claude code in nn/
+- need to change dataloader to return k actions total including current action
+- 
+
+
 # VOD: 0.0 is acutally 0.005, 0.2 FML
 
 # there are a few hardcoded things, like observation normalization, bird detection 

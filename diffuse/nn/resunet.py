@@ -4,34 +4,34 @@ from .embedding import TimeEmbedding
 from .resblock import ResBlock, DownResBlock, UpResBlock
 
 class ResUNet(nn.Module):
-    def __init__(self, in_channels, hidden_channels, num_layers, embed_dim, out_channels=None, num_classes=0, context_channels=0, num_aug_bins=0, use_done_head=False, context_actions=0):
+    '''
+    class is action
+    k is amount of context
+    '''
+    def __init__(self, in_channels, hidden_channels, num_layers, embed_dim, k, num_classes, act_embed_dim, num_aug_bins): 
         super().__init__()
-        self.context_channels = context_channels
-        self.context_actions = context_actions
-        self.use_done_head = use_done_head
-        self.time_embedding = TimeEmbedding(embed_dim=embed_dim)
-        self.class_embedding = nn.Embedding(num_classes + 1, embed_dim) if num_classes > 0 else None
-        self.aug_embedding = nn.Embedding(num_aug_bins, embed_dim) if num_aug_bins > 0 else None
+        self.time_embedding = TimeEmbedding(embed_dim=embed_dim) # already activated
+        self.class_embedding = nn.Embedding(num_classes + 1, act_embed_dim) # cfg
+        self.class_proj = nn.Sequential(nn.SiLU(), nn.Linear(act_embed_dim * k, embed_dim))
+        self.class_act = nn.SiLU()
+        self.aug_embedding = nn.Embedding(num_aug_bins, embed_dim)
+        self.aug_act = nn.SiLU()
+        # all these embeddings are one-time
 
-        # Action history embedding: embed past k actions and project to embed_dim
-        if context_actions > 0 and num_classes > 0:
-            action_embed_dim = 16  # Embed dimension per action
-            self.action_history_embed = nn.Embedding(num_classes, action_embed_dim)
-            self.action_history_proj = nn.Sequential(
-                nn.Linear(context_actions * action_embed_dim, embed_dim),
-                nn.SiLU(),
-            )
-        else:
-            self.action_history_embed = None
-            self.action_history_proj = None
-
-        # down: (in + context) -> h, h -> 2h, ... 2**(num_layers - 2)h -> 2**(num_layers - 1)h
-        down_blocks_list = [DownResBlock(in_channels + context_channels, hidden_channels, embed_dim)]
+        # down: in * (k+1) -> h, h -> 2h, ... 2**(num_layers - 2)h -> 2**(num_layers - 1)h
+        down_blocks_list = [DownResBlock(in_channels * (k + 1), hidden_channels, embed_dim)]
         for i in range(num_layers - 1):
             down_blocks_list.append(DownResBlock(hidden_channels * 2**i, hidden_channels * 2**(i + 1), embed_dim))
         self.down_blocks = nn.ModuleList(down_blocks_list)
 
         self.bot = ResBlock(hidden_channels * 2**(num_layers - 1), hidden_channels * 2**num_layers, embed_dim)
+        self.done_head = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(hidden_channels * 2**num_layers, 64),
+            nn.SiLU(),
+            nn.Linear(64, 1),
+        )
 
         # up: 2**(num_layers)h -> 2**(num_layers - 1)h, ... 2h -> h
         up_blocks_list = []
@@ -39,37 +39,18 @@ class ResUNet(nn.Module):
             up_blocks_list.append(UpResBlock(hidden_channels * 2**(num_layers - i), hidden_channels * 2**(num_layers - i - 1), embed_dim))
         self.up_blocks = nn.ModuleList(up_blocks_list)
 
-        if out_channels is None:
-            out_channels = in_channels
-        self.out_conv = nn.Conv2d(hidden_channels, out_channels, kernel_size=1)
+        self.out_conv = nn.Conv2d(hidden_channels, in_channels, kernel_size=1)
 
-        # Done head: predicts termination from bottleneck features
-        if use_done_head:
-            bottleneck_channels = hidden_channels * 2**num_layers
-            self.done_head = nn.Sequential(
-                nn.AdaptiveAvgPool2d(1),
-                nn.Flatten(),
-                nn.Linear(bottleneck_channels, 64),
-                nn.SiLU(),
-                nn.Linear(64, 1),
-            )
-
-    def forward(self, x, t, c=None, past_actions=None, z_cond=None, aug_level=None, return_done=False):
-        # x: (B, C, H, W), t: (B,), c: (B,), past_actions: (B, k), z_cond: (B, context_channels, H, W), aug_level: (B,)
-        if z_cond is not None:
-            x = torch.cat([x, z_cond], dim=1)
+    def forward(self, x, t, z_cond, c, aug_level):
+        # x: (B, C, H, W), t: (B,), z_cond: (B, C * k, H, W), c: (B, k), aug_level: (B,)
+        x = torch.cat([x, z_cond], dim=1)
 
         t_emb = self.time_embedding(t)
-        c_emb = self.class_embedding(c) if self.class_embedding is not None and c is not None else None
-        aug_emb = self.aug_embedding(aug_level) if self.aug_embedding is not None and aug_level is not None else None
-
-        # Embed past action history and add to time embedding
-        if self.action_history_embed is not None and past_actions is not None:
-            # past_actions: (B, k) -> embed -> (B, k, action_embed_dim) -> flatten -> (B, k*action_embed_dim)
-            past_action_emb = self.action_history_embed(past_actions)  # (B, k, 16)
-            past_action_emb = past_action_emb.flatten(1)  # (B, k*16)
-            past_action_emb = self.action_history_proj(past_action_emb)  # (B, embed_dim)
-            t_emb = t_emb + past_action_emb
+        action_emb = self.class_embedding(c)
+        action_emb = action_emb.flatten(1)
+        c_emb = self.class_act(self.class_proj(action_emb))
+        aug_emb = self.aug_act(self.aug_embedding(aug_level))
+        # get (B, emb_dim)
 
         skip_connections = []
         for down_block in self.down_blocks:
@@ -77,15 +58,10 @@ class ResUNet(nn.Module):
             skip_connections.append(skip)
         x = self.bot(x, t_emb, c_emb, aug_emb)
 
-        # Compute done logit from bottleneck if requested
-        done_logit = None
-        if self.use_done_head and return_done:
-            done_logit = self.done_head(x)
+        done_logit = self.done_head(x)
 
         for up_block in self.up_blocks:
             x = up_block(x, skip_connections.pop(), t_emb, c_emb, aug_emb)
         x = self.out_conv(x)
 
-        if return_done:
-            return x, done_logit
-        return x
+        return x, done_logit

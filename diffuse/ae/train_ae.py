@@ -29,7 +29,7 @@ train_config = {
     "lr": 1e-4,
     "num_epochs": 200,
     "batch_size": 256,
-    "kl_weight": 1e-6,
+    "kl_weight": 1e-3,
     "grad_weight": 1.0,
     "bird_weight": 10.0,  # extra weight for bird pixels
     "log_interval": 1,

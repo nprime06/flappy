@@ -49,8 +49,8 @@ done
 # Build encode script arguments
 ENCODE_ARGS="--vod-dir $VOD_DIR --output-dir $OUTPUT_DIR --vae-checkpoint $VAE_CHECKPOINT --batch-size $BATCH_SIZE"
 
-# Create log directory
-LOG_DIR="$OUTPUT_DIR"
+# Create log directory (separate from output dir since encoding wipes output dir)
+LOG_DIR="/home/willzhao/flappy/diffuse/ngen/encode-logs"
 mkdir -p "$LOG_DIR"
 
 echo "Submitting VOD encoding job:"
@@ -76,3 +76,4 @@ sbatch \
     /home/willzhao/flappy/diffuse/ngen/encode_vod.sh
 
 echo "Job submitted. Logs will be in: $LOG_DIR"
+echo "(Note: output dir $OUTPUT_DIR will be wiped and recreated during encoding)"
