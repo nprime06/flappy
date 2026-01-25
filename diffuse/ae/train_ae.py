@@ -21,7 +21,7 @@ model_config = {
     "image_channels": 3,
     "hidden_channels": 16,
     "latent_channels": 4,
-    "num_layers": 4,
+    "num_layers": 3,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
 }
 
