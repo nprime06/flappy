@@ -71,12 +71,10 @@ train_config = {
     "checkpoint_interval": 5,
     "num_workers": 4,
 
-    "reflow_steps": 50, 
-    "cfg_dropout_prob": 0.1, 
+    "reflow_steps": 50,
+    "cfg_dropout_prob": 0.1,
     "done_loss_weight": 0.1, # Weight for done head BCE loss
     "action_weight": 17.0, # extra weight for action=1 to fix class imbalance
-    "vae_checkpoint": "/home/willzhao/flappy/diffuse/ae/runs/vae_20260115_022006/checkpoints/latest.pt",
-    "data_dir": "/home/willzhao/flappy/vod",
     "runs_dir": "/home/willzhao/flappy/diffuse/ngen/runs",
     "device": "cuda" if torch.cuda.is_available() else "cpu",
 }

@@ -2,11 +2,11 @@
 # Wrapper script to submit NGEN training job with proper GPU allocation
 #
 # USAGE:
-#   ./submit_ngen.sh                           # New run, 1 GPU
+#   ./submit_ngen.sh                           # New run, 1 GPU (uses default latent-vod)
 #   ./submit_ngen.sh --gpus 4                  # New run, 4 GPUs
 #   ./submit_ngen.sh --run-dir /path/to/run    # Resume existing run (use full absolute path)
 #   ./submit_ngen.sh --reflow /path/to/ckpt    # Reflow training
-#   ./submit_ngen.sh --latent-vod /path/to/latent-vod  # Use pre-computed latents (faster)
+#   ./submit_ngen.sh --latent-vod /path/to/dir # Override latent-vod directory
 #   ./submit_ngen.sh --gpus 4 --run-dir /path  # Resume with 4 GPUs (use full absolute path)
 
 set -euo pipefail
@@ -15,7 +15,7 @@ set -euo pipefail
 NUM_GPUS=1
 RUN_DIR=""
 REFLOW=""
-LATENT_VOD=""
+LATENT_VOD="/home/willzhao/flappy/latent-vod"
 TIME="6:00:00"
 
 # Parse arguments
