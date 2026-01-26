@@ -16,6 +16,10 @@ from diffuse.nn.ae import VAE
 from diffuse.nn.resunet import ResUNet
 from diffuse.ngen.sampler import euler_sample, euler_sample_cfg
 
+# Latent normalization constants (from encode_vod.py)
+LATENT_MEAN = 0.4735
+LATENT_STD = 1.5931
+
 
 def load_vae(checkpoint_path, device):
     """Load frozen VAE from checkpoint."""
@@ -43,11 +47,10 @@ def load_flow_model(checkpoint_path, device):
         hidden_channels=cfg["hidden_channels"],
         num_layers=cfg["num_layers"],
         embed_dim=cfg["embed_dim"],
+        act_embed_dim=cfg["act_embed_dim"],
         num_classes=cfg["num_classes"],
-        context_channels=cfg["context_frames"] * cfg["in_channels"],
+        context_size=cfg["context_size"],
         num_aug_bins=cfg["num_aug_bins"],
-        use_done_head=cfg.get("use_done_head", False),
-        context_actions=cfg.get("context_actions", 0),
     ).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
@@ -151,44 +154,25 @@ def main():
     print(f"Loading flow model from {args.ngen_checkpoint}")
     flow_model, model_cfg = load_flow_model(args.ngen_checkpoint, device)
 
-    # Load training config from checkpoint
-    ckpt = torch.load(args.ngen_checkpoint, map_location=device, weights_only=False)
-    train_cfg = ckpt["train_config"]
-
-    # Get VAE checkpoint path
-    vae_path = args.vae_checkpoint or train_cfg["vae_checkpoint"]
-    # Handle cluster vs local paths
-    if not os.path.exists(vae_path):
-        # Try local path
-        local_vae = vae_path.replace("/home/willzhao/flappy/diffuse",
-                                      os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if os.path.exists(local_vae):
-            vae_path = local_vae
-        else:
-            print(f"VAE checkpoint not found at {vae_path}")
-            print("Please specify --vae-checkpoint")
-            sys.exit(1)
+    # Get VAE checkpoint path (required)
+    if not args.vae_checkpoint:
+        print("Error: --vae-checkpoint is required")
+        sys.exit(1)
+    vae_path = args.vae_checkpoint
 
     print(f"Loading VAE from {vae_path}")
     vae = load_vae(vae_path, device)
 
-    # Get vod directory
-    vod_dir = args.vod_dir or train_cfg.get("data_dir")
-    if vod_dir and not os.path.exists(vod_dir):
-        # Try local path
-        local_vod = vod_dir.replace("/home/willzhao/flappy",
-                                     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        if os.path.exists(local_vod):
-            vod_dir = local_vod
-
-    if not vod_dir or not os.path.exists(vod_dir):
-        print(f"VOD directory not found. Please specify --vod-dir")
+    # Get vod directory (required)
+    if not args.vod_dir:
+        print("Error: --vod-dir is required")
         sys.exit(1)
+    vod_dir = args.vod_dir
 
     # Config values
-    k = model_cfg["context_frames"]
-    latent_mean = train_cfg["latent_mean"]
-    latent_std = train_cfg["latent_std"]
+    k = model_cfg["context_size"]
+    latent_mean = LATENT_MEAN
+    latent_std = LATENT_STD
     num_aug_bins = model_cfg["num_aug_bins"]
 
     print(f"Context frames: {k}")
@@ -230,9 +214,6 @@ def main():
     # aug_level: use median level at inference for stability
     aug_level = torch.full((1,), args.aug_level, dtype=torch.long, device=device)
 
-    # Check if model uses action history conditioning
-    uses_action_history = model_cfg.get("context_actions", 0) > 0
-
     running = True
     frame_count = 0
     start_time = time.time()
@@ -264,19 +245,12 @@ def main():
         frame_buffer.pop(0)
         frame_buffer.append(z_display.clone())
 
-        # Update action buffer BEFORE sampling (just like frame buffer)
-        action_buffer.pop(0)
-        action_buffer.append(action)
-
         # Prepare conditioning (now includes z_display)
         z_cond = torch.cat(frame_buffer, dim=1)  # (1, k*latent_ch, H', W')
-        action_tensor = torch.tensor([action], dtype=torch.long, device=device)
 
-        # Prepare past actions tensor (if model uses action history)
-        if uses_action_history:
-            past_actions = torch.tensor([action_buffer], dtype=torch.long, device=device)  # (1, k)
-        else:
-            past_actions = None
+        # Build actions tensor: k actions that caused context frames + action causing target
+        # action_buffer contains k actions for context, current action is for target
+        actions = torch.tensor([action_buffer + [action]], dtype=torch.long, device=device)  # (1, k+1)
 
         # Sample next frame using flow model
         with torch.no_grad():
@@ -289,12 +263,12 @@ def main():
             # Use CFG if enabled
             if args.use_cfg:
                 z_next = euler_sample_cfg(
-                    flow_model, z_0, z_cond, past_actions, action_tensor, aug_level,
+                    flow_model, z_0, z_cond, actions, aug_level,
                     cfg_scale=args.cfg_scale, num_steps=args.num_steps
                 )
             else:
                 z_next = euler_sample(
-                    flow_model, z_0, z_cond, past_actions, action_tensor, aug_level,
+                    flow_model, z_0, z_cond, actions, aug_level,
                     num_steps=args.num_steps
                 )
 
@@ -302,25 +276,23 @@ def main():
             if args.smoothing > 0:
                 z_next = (1 - args.smoothing) * z_next + args.smoothing * z_display
 
-            # Check done prediction if model has done head
-            if hasattr(flow_model, 'use_done_head') and flow_model.use_done_head:
-                t_final = torch.ones(1, device=device)
-                _, done_logit = flow_model(z_next, t_final, c=action_tensor, past_actions=past_actions,
-                                           z_cond=z_cond, aug_level=aug_level, return_done=True)
-                done_prob = torch.sigmoid(done_logit).item()
-                if done_prob > args.done_threshold:
-                    print(f"Game Over! (done_prob={done_prob:.2f})")
-                    # Could break here or reset to new episode
-                    # For now, just print and continue
+            # Check done prediction (model always returns done_logit)
+            t_final = torch.ones(1, device=device)
+            _, done_logit = flow_model(z_next, t_final, z_cond=z_cond, c=actions, aug_level=aug_level)
+            done_prob = torch.sigmoid(done_logit).item()
+            if done_prob > args.done_threshold:
+                print(f"Game Over! (done_prob={done_prob:.2f})")
+                # Could break here or reset to new episode
+                # For now, just print and continue
 
         # Debug logging
         if args.debug and frame_count % 10 == 0:
             # Test action conditioning: what would happen with opposite action?
             with torch.no_grad():
                 alt_action = 1 - action
-                alt_action_tensor = torch.tensor([alt_action], dtype=torch.long, device=device)
+                alt_actions = torch.tensor([action_buffer + [alt_action]], dtype=torch.long, device=device)
                 z_next_alt = euler_sample(
-                    flow_model, z_0, z_cond, past_actions, alt_action_tensor, aug_level,
+                    flow_model, z_0, z_cond, alt_actions, aug_level,
                     num_steps=args.num_steps
                 )
                 action_diff = torch.abs(z_next - z_next_alt).mean().item()
@@ -331,8 +303,10 @@ def main():
                   f"frame_diff={torch.abs(z_next - z_display).mean():.4f}, "
                   f"action_diff={action_diff:.4f}")
 
-        # Update current display latent
+        # Update current display latent and action buffer
         z_display = z_next
+        action_buffer.pop(0)
+        action_buffer.append(action)
 
         # Decode and display
         img = latent_to_image(vae, z_display, latent_mean, latent_std)
