@@ -5,7 +5,8 @@ import torch.nn.functional as F
 
 
 def flow_matching_loss(model, z_target, z_cond, actions, aug_level, z_0=None,
-                       done_labels=None, done_loss_weight=0.1, action_weight=1.0):
+                       done_labels=None, done_loss_weight=0.1, action_weight=1.0,
+                       done_pos_weight=1.0):
     """
     Compute flow matching loss with optional done head loss.
 
@@ -20,6 +21,8 @@ def flow_matching_loss(model, z_target, z_cond, actions, aug_level, z_0=None,
         done_labels: Binary labels for termination (B,). If None, skip done loss.
         done_loss_weight: Weight for done head BCE loss.
         action_weight: Loss weight multiplier for action=1 samples (to fix class imbalance).
+        done_pos_weight: BCE pos_weight for done=1 samples (to fix class imbalance).
+                        Should be ~average episode length since each episode has 1 done=1.
 
     Returns:
         loss: Total loss (flow + done)
@@ -59,8 +62,11 @@ def flow_matching_loss(model, z_target, z_cond, actions, aug_level, z_0=None,
 
     info = {}
 
-    # Add done loss if labels provided
-    done_loss = F.binary_cross_entropy_with_logits(done_logit.squeeze(-1), done_labels)
+    # Add done loss with pos_weight to handle class imbalance (done=1 is rare)
+    pos_weight = torch.tensor([done_pos_weight], device=done_logit.device)
+    done_loss = F.binary_cross_entropy_with_logits(
+        done_logit.squeeze(-1), done_labels, pos_weight=pos_weight
+    )
     total_loss = flow_loss + done_loss_weight * done_loss
     info["done_loss"] = done_loss.item()
 

@@ -74,6 +74,7 @@ train_config = {
     "reflow_steps": 50,
     "cfg_dropout_prob": 0.1,
     "done_loss_weight": 0.1, # Weight for done head BCE loss
+    "done_pos_weight": 30.0, # BCE pos_weight for done=1 (~avg episode length)
     "action_weight": 17.0, # extra weight for action=1 to fix class imbalance
     "runs_dir": "/home/willzhao/flappy/diffuse/ngen/runs",
     "device": "cuda" if torch.cuda.is_available() else "cpu",
@@ -246,6 +247,7 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
     num_aug_bins = model_config["num_aug_bins"]
     cfg_dropout_prob = train_config["cfg_dropout_prob"]
     done_loss_weight = train_config["done_loss_weight"]
+    done_pos_weight = train_config["done_pos_weight"]
     action_weight = train_config["action_weight"]
 
     model.train()
@@ -292,7 +294,7 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
                 loss, info = flow_matching_loss(
                     model, z_target, z_cond, actions, aug_level, z_0=z_0,
                     done_labels=done_labels, done_loss_weight=done_loss_weight,
-                    action_weight=action_weight
+                    action_weight=action_weight, done_pos_weight=done_pos_weight
                 )
 
             optimizer.zero_grad()

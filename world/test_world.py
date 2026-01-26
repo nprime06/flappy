@@ -280,10 +280,10 @@ def main():
             t_final = torch.ones(1, device=device)
             _, done_logit = flow_model(z_next, t_final, z_cond=z_cond, c=actions, aug_level=aug_level)
             done_prob = torch.sigmoid(done_logit).item()
+            print(f"Frame {frame_count}: done_prob={done_prob:.3f}", end="\r")
             if done_prob > args.done_threshold:
-                print(f"Game Over! (done_prob={done_prob:.2f})")
-                # Could break here or reset to new episode
-                # For now, just print and continue
+                print(f"\nGame Over! (done_prob={done_prob:.2f}, frame={frame_count})")
+                running = False
 
         # Debug logging
         if args.debug and frame_count % 10 == 0:
