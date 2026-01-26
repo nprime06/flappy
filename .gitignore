@@ -159,4 +159,6 @@ frames/
 vod/
 trained_model/
 runs/
-latent-vod/
+latent-vod/*
+!latent-vod/*.py
+!latent-vod/*.sh

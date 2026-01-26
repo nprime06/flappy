@@ -22,15 +22,10 @@ class LatentTraceDataset(Dataset):
     def __init__(self, latent_vod_dir, k=4):
         self.k = k
 
-        # Build index: list of (run_path, step_idx, action, done) for valid samples
         self.samples = []
         action_0_samples = []
         action_1_samples = []
-
-        # Store actions dict per episode for looking up past actions
         self.episode_actions = {}
-
-        # Cache loaded latents per run (lazy loading)
         self._latent_cache = {}
 
         for run_dir in Path(latent_vod_dir).glob("*/*/"):
@@ -39,31 +34,24 @@ class LatentTraceDataset(Dataset):
             if not latents_file.exists() or not info_file.exists():
                 continue
 
-            # Parse actions AND done flags from run_info.jsonl
             actions = {}
-            done_flags = {}
             with open(info_file) as f:
                 for line in f:
                     rec = json.loads(line)
                     if "step" in rec:
                         actions[rec["step"]] = rec["action"]
-                        done_flags[rec["step"]] = rec.get("terminated", False) or rec.get("truncated", False)
 
-            # Store actions dict for this episode (keyed by run_dir path)
             run_key = str(run_dir)
             self.episode_actions[run_key] = actions
 
-            # Get number of frames from latents file
             latents = torch.load(latents_file, map_location="cpu", weights_only=True)
             n_frames = latents.shape[0]
 
-            # Cache latents
             self._latent_cache[run_key] = latents
 
-            # Valid samples: steps where we have k prior frames within the same episode
             for step in range(k, n_frames):
                 if step in actions:
-                    done = done_flags.get(step, step == n_frames - 1)
+                    done = (step == n_frames - 1)  # last frame 
                     sample = (run_key, step, actions[step], done)
                     self.samples.append(sample)
 
@@ -78,17 +66,10 @@ class LatentTraceDataset(Dataset):
     def __getitem__(self, idx):
         run_key, step, _action, done = self.samples[idx]  # _action unused, we build all k+1 from dict
 
-        # Get cached latents for this run
         latents = self._latent_cache[run_key]
-
-        # Get current latent
         current_latent = latents[step]  # (4, H', W')
-
-        # Get past k latents
         past_latents = latents[step - self.k:step]  # (k, 4, H', W')
 
-        # Load k+1 actions: [step-k, step-k+1, ..., step] inclusive
-        # These are the k actions that caused the k context latents, plus the action that causes the target latent
         actions_dict = self.episode_actions[run_key]
         actions = []
         for i in range(step - self.k, step + 1):  # step-k to step inclusive = k+1 actions
@@ -99,7 +80,6 @@ class LatentTraceDataset(Dataset):
 
 
 if __name__ == "__main__":
-    # Test with local latent-vod directory
     dataset = LatentTraceDataset("/Users/william/Desktop/Random/flappy/latent-vod")
     print(f"Dataset size: {len(dataset)}")
 
