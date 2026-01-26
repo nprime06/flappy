@@ -24,8 +24,8 @@ from tqdm import tqdm
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from diffuse.nn.ae import VAE
 
-LATENT_MEAN = 0.4755
-LATENT_STD = 1.5959
+LATENT_MEAN = 0.4735
+LATENT_STD = 1.5931
 
 def load_vae(checkpoint_path, device):
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)

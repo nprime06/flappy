@@ -18,6 +18,7 @@ initial latents: it is out of distribution to start from data -> data (need to r
 
 definitely want to compress all training data to latent before doing anything
 - assume that latent-vod/ latents are already normalized
+- vae_20260125_125114 accidentally used LATENT_MEAN = 0.4755, LATENT_STD = 1.5959 instead of correct LATENT_MEAN = 0.4735, LATENT_STD = 1.5931 but that should be okay
 
 conditioning question. conceptually i think action conditioning is very important for ensuring consistent training dynamics, whereas the past frames conditioning kind of just tells you how the pipes arem oving (quite predictable and whatnot) idkdidiidkdk its prolly impractical to have different amount of frame and action conditioning? 
 
