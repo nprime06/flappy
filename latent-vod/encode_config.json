@@ -1,0 +1,7 @@
+{
+  "vae_checkpoint": "/home/willzhao/flappy/diffuse/ae/runs/vae_20260125_125114/checkpoints/latest.pt",
+  "latent_mean": 0.4755,
+  "latent_std": 1.5959,
+  "batch_size": 64,
+  "encoded_at": "2026-01-26T11:37:06.538782"
+}
