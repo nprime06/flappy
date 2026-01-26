@@ -8,9 +8,11 @@ import time
 from datetime import datetime
 from tqdm import tqdm
 
+import math
 import torch
 import torch.nn.functional as F
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -112,6 +114,17 @@ def train(run_dir=None):
 
     optimizer = AdamW(model.parameters(), lr=train_config["lr"])
 
+    # Cosine annealing LR scheduler starting at epoch 100
+    def lr_lambda(step):
+        if step < 100:
+            return 1.0
+        else:
+            # Cosine annealing from epoch 100 to 200
+            progress = (step - 100) / (train_config["num_epochs"] - 100)
+            return 0.5 * (1 + math.cos(math.pi * progress))
+
+    scheduler = LambdaLR(optimizer, lr_lambda)
+
     # Setup run directory
     if run_dir is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -143,6 +156,9 @@ def train(run_dir=None):
         optimizer.load_state_dict(ckpt["optimizer"])
         start_epoch = ckpt["epoch"]
         total_wall_time = ckpt.get("wall_time_s", 0.0)
+        # Step scheduler to catch up
+        for _ in range(start_epoch):
+            scheduler.step()
         print(f"Resumed at epoch {start_epoch}")
 
     # Setup data
@@ -204,6 +220,10 @@ def train(run_dir=None):
         avg_kl = epoch_kl / n_batches
         wall_time_s = total_wall_time + (time.perf_counter() - train_start_t)
 
+        # Step scheduler and get current learning rate
+        scheduler.step()
+        current_lr = optimizer.param_groups[0]["lr"]
+
         # Log every epoch
         log_file.write(json.dumps({
             "epoch": epoch + 1,
@@ -211,6 +231,7 @@ def train(run_dir=None):
             "l1_loss": avg_l1,
             "grad_loss": avg_grad,
             "kl_loss": avg_kl,
+            "lr": current_lr,
             "wall_time_s": wall_time_s,
         }) + "\n")
 

@@ -24,6 +24,7 @@ from ngen.latent_data import LatentTraceDataset
 from ngen.loss import flow_matching_loss
 from ngen.sampler import ReflowPairGenerator
 
+# work directly with normalized latents
 
 def setup_ddp():
     """Initialize DDP. Returns (rank, local_rank, world_size, device)."""
@@ -57,14 +58,10 @@ model_config = {
     "hidden_channels": 64,
     "num_layers": 2,            # limited by odd latent width (18)
     "embed_dim": 128,
+    "act_embed_dim": 16,
     "num_classes": 2,           # flappy bird: 0=no-flap, 1=flap
-    "context_frames": 8,        # k past frames (increased from 2)
-    "context_actions": 8,       # k past actions (same as context_frames)
-    "num_aug_bins": 16,
-    "cfg_dropout_prob": 0.1,    # CFG: zero out conditioning 10% of time
-    "use_done_head": True,      # Enable termination detection head
-    "done_loss_weight": 0.1,    # Weight for done head BCE loss
-    "action_weight": 17.0,      # Loss weight for action=1 (fixes 94.6%/5.4% imbalance)
+    "context_size": 8,               # k frames and actions
+    "num_aug_bins": 8,
 }
 
 train_config = {
@@ -72,37 +69,21 @@ train_config = {
     "num_epochs": 100,
     "batch_size": 256,
     "max_aug_std": 0.5,
-    "latent_mean": 10.1880,
-    "latent_std": 13.3726,
     "log_interval": 1,
     "checkpoint_interval": 5,
     "num_workers": 4,
-    "reflow_steps": 50,         # Euler steps for reflow pair generation
+
+    "reflow_steps": 50, 
+    "cfg_dropout_prob": 0.1, 
+    "done_loss_weight": 0.1, # Weight for done head BCE loss
+    "action_weight": 17.0, # extra weight for action=1 to fix class imbalance
     "vae_checkpoint": "/home/willzhao/flappy/diffuse/ae/runs/vae_20260115_022006/checkpoints/latest.pt",
     "data_dir": "/home/willzhao/flappy/vod",
     "runs_dir": "/home/willzhao/flappy/diffuse/ngen/runs",
     "device": "cuda" if torch.cuda.is_available() else "cpu",
 }
 
-
-def load_vae(checkpoint_path, device):
-    """Load frozen VAE from checkpoint."""
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    cfg = ckpt["model_config"]
-    vae = VAE(
-        image_channels=cfg["image_channels"],
-        hidden_channels=cfg["hidden_channels"],
-        latent_channels=cfg["latent_channels"],
-        num_layers=cfg["num_layers"],
-    ).to(device)
-    vae.load_state_dict(ckpt["model"])
-    vae.eval()
-    for p in vae.parameters():
-        p.requires_grad = False
-    return vae
-
-
-def load_flow_model(checkpoint_path, device):
+def load_flow_model(checkpoint_path, device): # fix this later!
     """Load a pre-trained flow model (for reflow)."""
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     cfg = ckpt["model_config"]
@@ -112,24 +93,14 @@ def load_flow_model(checkpoint_path, device):
         num_layers=cfg["num_layers"],
         embed_dim=cfg["embed_dim"],
         num_classes=cfg["num_classes"],
-        context_channels=cfg["context_frames"] * cfg["in_channels"],
+        context_size=cfg["context_size"],
         num_aug_bins=cfg["num_aug_bins"],
-        context_actions=cfg.get("context_actions", 0),  # For backward compatibility
     ).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
     for p in model.parameters():
         p.requires_grad = False
     return model
-
-
-def vae_encode(vae, x, latent_mean, latent_std):
-    """Encode image to normalized latent mean (deterministic)."""
-    encoded = vae.encoder(x)
-    z, _, _ = vae.reparameterize(encoded, sample=False)
-    z = (z - latent_mean) / latent_std
-    return z
-
 
 def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
     """
@@ -146,17 +117,6 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
     rank, local_rank, world_size, device = setup_ddp()
     is_main = is_main_process(rank)
 
-    # Load frozen VAE only if not using pre-computed latents
-    vae = None
-    if latent_vod is None:
-        if is_main:
-            print(f"Loading VAE from {train_config['vae_checkpoint']}")
-        vae = load_vae(train_config["vae_checkpoint"], device)
-        # vae.encoder = torch.compile(vae.encoder)  # Disabled: causes OOM on multi-GPU DDP
-    else:
-        if is_main:
-            print(f"Using pre-computed latents from {latent_vod}")
-            print("VAE loading skipped (not needed for latent mode)")
 
     # Load reflow model if specified (not wrapped in DDP - inference only)
     reflow_generator = None
@@ -174,11 +134,10 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
         hidden_channels=model_config["hidden_channels"],
         num_layers=model_config["num_layers"],
         embed_dim=model_config["embed_dim"],
+        act_embed_dim=model_config["act_embed_dim"],
         num_classes=model_config["num_classes"],
-        context_channels=model_config["context_frames"] * model_config["in_channels"],
+        context_size=model_config["context_size"],
         num_aug_bins=model_config["num_aug_bins"],
-        use_done_head=model_config.get("use_done_head", False),
-        context_actions=model_config.get("context_actions", 0),
     ).to(device)
 
     if is_main:

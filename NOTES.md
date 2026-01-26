@@ -16,5 +16,8 @@ Refactor/cleanup 1/24:
 initial latents: it is out of distribution to start from data -> data (need to refresh noise at inference ?) but still is interesting idea to test out? 
 
 definitely want to compress all training data to latent before doing anything
+- assume that latent-vod/ latents are already normalized
 
 conditioning question. conceptually i think action conditioning is very important for ensuring consistent training dynamics, whereas the past frames conditioning kind of just tells you how the pipes arem oving (quite predictable and whatnot) idkdidiidkdk its prolly impractical to have different amount of frame and action conditioning? 
+
+think carefully abt reflow, we still have to train with noise aug, etc. only diff is to change choosing x0~N(0,1)

@@ -3,23 +3,19 @@ import torch.nn as nn
 from .embedding import TimeEmbedding
 from .resblock import ResBlock, DownResBlock, UpResBlock
 
-class ResUNet(nn.Module):
-    '''
-    class is action
-    k is amount of context
-    '''
-    def __init__(self, in_channels, hidden_channels, num_layers, embed_dim, k, num_classes, act_embed_dim, num_aug_bins): 
+class ResUNet(nn.Module): # class is action, k is amount of context
+    def __init__(self, in_channels, hidden_channels, num_layers, embed_dim, act_embed_dim, num_classes, context_size, num_aug_bins): 
         super().__init__()
         self.time_embedding = TimeEmbedding(embed_dim=embed_dim) # already activated
         self.class_embedding = nn.Embedding(num_classes + 1, act_embed_dim) # cfg
-        self.class_proj = nn.Sequential(nn.SiLU(), nn.Linear(act_embed_dim * k, embed_dim))
+        self.class_proj = nn.Sequential(nn.SiLU(), nn.Linear(act_embed_dim * context_size, embed_dim))
         self.class_act = nn.SiLU()
         self.aug_embedding = nn.Embedding(num_aug_bins, embed_dim)
         self.aug_act = nn.SiLU()
         # all these embeddings are one-time
 
         # down: in * (k+1) -> h, h -> 2h, ... 2**(num_layers - 2)h -> 2**(num_layers - 1)h
-        down_blocks_list = [DownResBlock(in_channels * (k + 1), hidden_channels, embed_dim)]
+        down_blocks_list = [DownResBlock(in_channels * (context_size + 1), hidden_channels, embed_dim)]
         for i in range(num_layers - 1):
             down_blocks_list.append(DownResBlock(hidden_channels * 2**i, hidden_channels * 2**(i + 1), embed_dim))
         self.down_blocks = nn.ModuleList(down_blocks_list)
