@@ -8,6 +8,7 @@ Refactor/cleanup 1/24:
 - need to change dataloader to return k actions total including current action
 - 
 
+# VOD: the very first frame right after gym.make is NOT saved
 
 # VOD: 0.0 is acutally 0.005, 0.2 FML
 

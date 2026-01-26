@@ -174,7 +174,7 @@ def run_episode(
     if cfg.use_lidar is not None:
         env_kwargs["use_lidar"] = bool(cfg.use_lidar)
 
-    env = gym.make(cfg.env_id, **env_kwargs)
+    env = gym.make(cfg.env_id, **env_kwargs) # first frame not saved
 
     t0 = time.time()
     obs, info = env.reset(seed=cfg.seed)

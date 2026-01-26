@@ -39,7 +39,7 @@ class DecoderWrapper(nn.Module):
 
 
 class ResUNetWrapper(nn.Module):
-    """Wrap ResUNet to make all inputs required (no None checks in graph)."""
+    """Wrap ResUNet - returns v_pred and done_logit."""
 
     def __init__(self, model):
         super().__init__()
@@ -48,23 +48,11 @@ class ResUNetWrapper(nn.Module):
     def forward(self, x, t, c, z_cond, aug_level):
         # x: (B, 4, 18, 18) - current latent
         # t: (B,) - timestep in [0, 1]
-        # c: (B,) - action class (0=no-flap, 1=flap)
-        # z_cond: (B, 32, 18, 18) - 8 past frames concatenated
-        # aug_level: (B,) - augmentation bin index (0-15)
-        return self.model(x, t, c=c, z_cond=z_cond, aug_level=aug_level)
-
-
-class ResUNetWithDoneWrapper(nn.Module):
-    """Wrap ResUNet with done head - returns v_pred and done_logit."""
-
-    def __init__(self, model):
-        super().__init__()
-        self.model = model
-
-    def forward(self, x, t, c, z_cond, aug_level):
+        # c: (B, k+1) - action sequence
+        # z_cond: (B, k*4, 18, 18) - k past frames concatenated
+        # aug_level: (B,) - augmentation bin index
         # Returns: v_pred (B, 4, 18, 18), done_logit (B, 1)
-        v_pred, done_logit = self.model(x, t, c=c, z_cond=z_cond, aug_level=aug_level, return_done=True)
-        return v_pred, done_logit
+        return self.model(x, t, z_cond=z_cond, c=c, aug_level=aug_level)
 
 
 def load_vae(checkpoint_path, device):
@@ -91,10 +79,10 @@ def load_flow_model(checkpoint_path, device):
         hidden_channels=cfg["hidden_channels"],
         num_layers=cfg["num_layers"],
         embed_dim=cfg["embed_dim"],
+        act_embed_dim=cfg["act_embed_dim"],
         num_classes=cfg["num_classes"],
-        context_channels=cfg["context_frames"] * cfg["in_channels"],
+        context_size=cfg["context_size"],
         num_aug_bins=cfg["num_aug_bins"],
-        use_done_head=cfg.get("use_done_head", False),
     ).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
@@ -152,48 +140,43 @@ def export_decoder(vae, output_path, device):
     print(f"  Decoder exported: {os.path.getsize(output_path) / 1024 / 1024:.2f} MB")
 
 
-def export_resunet(flow_model, model_cfg, output_path, device, use_done_head=False):
+def export_resunet(flow_model, model_cfg, output_path, device):
     """Export ResUNet flow model to ONNX."""
-    print(f"Exporting ResUNet to {output_path} (done_head={use_done_head})")
+    print(f"Exporting ResUNet to {output_path}")
 
-    if use_done_head:
-        resunet = ResUNetWithDoneWrapper(flow_model).to(device)
-    else:
-        resunet = ResUNetWrapper(flow_model).to(device)
+    resunet = ResUNetWrapper(flow_model).to(device)
     resunet.eval()
 
     # Dummy inputs
     batch_size = 1
     latent_channels = model_cfg["in_channels"]  # 4
-    context_channels = model_cfg["context_frames"] * latent_channels  # 8 * 4 = 32
+    context_size = model_cfg["context_size"]  # k
+    context_channels = context_size * latent_channels  # k * 4
+    num_actions = context_size + 1  # k+1 actions
     latent_h, latent_w = 18, 18
 
     dummy_x = torch.randn(batch_size, latent_channels, latent_h, latent_w, device=device)
     dummy_t = torch.rand(batch_size, device=device)
-    dummy_c = torch.zeros(batch_size, dtype=torch.long, device=device)
+    dummy_c = torch.zeros(batch_size, num_actions, dtype=torch.long, device=device)
     dummy_z_cond = torch.randn(batch_size, context_channels, latent_h, latent_w, device=device)
     dummy_aug = torch.zeros(batch_size, dtype=torch.long, device=device)
-
-    output_names = ["v_pred", "done_logit"] if use_done_head else ["v_pred"]
-    dynamic_axes = {
-        "x": {0: "batch"},
-        "t": {0: "batch"},
-        "action": {0: "batch"},
-        "z_cond": {0: "batch"},
-        "aug_level": {0: "batch"},
-        "v_pred": {0: "batch"},
-    }
-    if use_done_head:
-        dynamic_axes["done_logit"] = {0: "batch"}
 
     torch.onnx.export(
         resunet,
         (dummy_x, dummy_t, dummy_c, dummy_z_cond, dummy_aug),
         output_path,
         opset_version=17,
-        input_names=["x", "t", "action", "z_cond", "aug_level"],
-        output_names=output_names,
-        dynamic_axes=dynamic_axes,
+        input_names=["x", "t", "actions", "z_cond", "aug_level"],
+        output_names=["v_pred", "done_logit"],
+        dynamic_axes={
+            "x": {0: "batch"},
+            "t": {0: "batch"},
+            "actions": {0: "batch"},
+            "z_cond": {0: "batch"},
+            "aug_level": {0: "batch"},
+            "v_pred": {0: "batch"},
+            "done_logit": {0: "batch"},
+        },
     )
     print(f"  ResUNet exported: {os.path.getsize(output_path) / 1024 / 1024:.2f} MB")
 
@@ -265,16 +248,12 @@ def main():
     decoder_path = os.path.join(args.output_dir, "decoder.onnx")
     resunet_path = os.path.join(args.output_dir, "resunet.onnx")
 
-    # Check if model has done head
-    use_done_head = flow_cfg.get("use_done_head", False)
-    print(f"  Done head enabled: {use_done_head}")
-
     # Export models
     print("\nExporting models...")
     with torch.no_grad():
         export_encoder(vae, encoder_path, device)
         export_decoder(vae, decoder_path, device)
-        export_resunet(flow_model, flow_cfg, resunet_path, device, use_done_head=use_done_head)
+        export_resunet(flow_model, flow_cfg, resunet_path, device)
 
     # Validate exports
     if args.validate:
@@ -305,13 +284,12 @@ def main():
     config = {
         "latent_mean": 10.1880,
         "latent_std": 13.3726,
-        "context_frames": flow_cfg["context_frames"],
+        "context_size": flow_cfg["context_size"],
         "latent_channels": flow_cfg["in_channels"],
         "num_aug_bins": flow_cfg["num_aug_bins"],
         "num_classes": flow_cfg["num_classes"],
         "image_size": 144,
         "latent_size": 18,
-        "use_done_head": use_done_head,
     }
     config_path = os.path.join(args.output_dir, "config.json")
     with open(config_path, "w") as f:

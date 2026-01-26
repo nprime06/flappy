@@ -14,7 +14,7 @@ from nn.ae import VAE
 
 
 def main():
-    checkpoint = "/Users/william/Desktop/Random/flappy/diffuse/ae/runs/vae_20260115_022006/checkpoints/latest.pt"
+    checkpoint = "/Users/william/Desktop/Random/flappy/diffuse/ae/runs/vae_20260125_125114/checkpoints/latest.pt"
     vod_dir = "/Users/william/Desktop/Random/flappy/vod"
     num_samples = 500
     device = "cuda" if torch.cuda.is_available() else "cpu"

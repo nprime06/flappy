@@ -3,12 +3,13 @@ import torch.nn as nn
 from .embedding import TimeEmbedding
 from .resblock import ResBlock, DownResBlock, UpResBlock
 
-class ResUNet(nn.Module): # class is action, k is amount of context
-    def __init__(self, in_channels, hidden_channels, num_layers, embed_dim, act_embed_dim, num_classes, context_size, num_aug_bins): 
+class ResUNet(nn.Module):  # context_size = k (number of context latent frames)
+    def __init__(self, in_channels, hidden_channels, num_layers, embed_dim, act_embed_dim, num_classes, context_size, num_aug_bins):
         super().__init__()
-        self.time_embedding = TimeEmbedding(embed_dim=embed_dim) # already activated
-        self.class_embedding = nn.Embedding(num_classes + 1, act_embed_dim) # cfg
-        self.class_proj = nn.Sequential(nn.SiLU(), nn.Linear(act_embed_dim * context_size, embed_dim))
+        self.time_embedding = TimeEmbedding(embed_dim=embed_dim)  # already activated
+        self.class_embedding = nn.Embedding(num_classes + 1, act_embed_dim)  # +1 for cfg null token
+        # k+1 actions: k actions for context frames + 1 action causing target
+        self.class_proj = nn.Sequential(nn.SiLU(), nn.Linear(act_embed_dim * (context_size + 1), embed_dim))
         self.class_act = nn.SiLU()
         self.aug_embedding = nn.Embedding(num_aug_bins, embed_dim)
         self.aug_act = nn.SiLU()
@@ -38,7 +39,8 @@ class ResUNet(nn.Module): # class is action, k is amount of context
         self.out_conv = nn.Conv2d(hidden_channels, in_channels, kernel_size=1)
 
     def forward(self, x, t, z_cond, c, aug_level):
-        # x: (B, C, H, W), t: (B,), z_cond: (B, C * k, H, W), c: (B, k), aug_level: (B,)
+        # x: (B, C, H, W), t: (B,), z_cond: (B, C * k, H, W), c: (B, k+1), aug_level: (B,)
+        # c contains k+1 actions: [a_{t-k}, ..., a_{t-1}, a_t] where a_t causes the target
         x = torch.cat([x, z_cond], dim=1)
 
         t_emb = self.time_embedding(t)
