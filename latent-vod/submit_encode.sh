@@ -56,8 +56,10 @@ fi
 # Build encode script arguments
 ENCODE_ARGS="--vod-dir $VOD_DIR --output-dir $OUTPUT_DIR --vae-checkpoint $VAE_CHECKPOINT --batch-size $BATCH_SIZE"
 
-# Create log directory (separate from output dir since encoding wipes output dir)
-LOG_DIR="/home/willzhao/flappy/latent-vod/encode-logs"
+# Create timestamped log directory (separate from output dir since encoding wipes output dir)
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+LOG_BASE_DIR="/home/willzhao/flappy/latent-vod/encode-logs"
+LOG_DIR="${LOG_BASE_DIR}/encode_${TIMESTAMP}"
 mkdir -p "$LOG_DIR"
 
 echo "Submitting VOD encoding job:"
@@ -66,6 +68,7 @@ echo "  Time limit: $TIME"
 echo "  VOD dir: $VOD_DIR"
 echo "  Output dir: $OUTPUT_DIR"
 echo "  VAE checkpoint: $VAE_CHECKPOINT"
+echo "  Log dir: $LOG_DIR"
 
 # Submit job - single GPU, encoding is fast
 sbatch \

@@ -102,11 +102,15 @@ def main():
     output_dir = Path(args.output_dir)
     if output_dir.exists():
         for item in output_dir.iterdir(): 
-            if not (item.is_file() and (item.suffix == '.py' or item.suffix == '.sh')):
-                if item.is_dir():
-                    shutil.rmtree(item)
-                else:
-                    item.unlink()
+            # Preserve script files (.py, .sh) and encode-logs directory
+            if item.is_file() and (item.suffix == '.py' or item.suffix == '.sh'):
+                continue
+            if item.is_dir() and item.name == 'encode-logs':
+                continue
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
     else:
         output_dir.mkdir(parents=True, exist_ok=True)
 
