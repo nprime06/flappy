@@ -9,7 +9,7 @@ from datetime import datetime
 import torch
 import torch.nn as nn
 from torch.optim import Adam
-from environment import run_episode, RunConfig
+from game.environment import run_episode, RunConfig
 
 CONFIG = {
     "lr": 3e-4,

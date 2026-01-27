@@ -1,17 +1,20 @@
 import os
 import random
+import sys
 import torch
-from environment import run_episode, RunConfig
-from rl.train_ppo import ActorCritic, PPOAgent
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from game.environment import run_episode, RunConfig
+from game.rl.train_ppo import ActorCritic, PPOAgent
 from tqdm import tqdm
 
 RUN_ID = "20260108_034928"
 CHECKPOINT = "latest.pt"
 # uses trained PPO checkpoint
 
-p_stim = 0.0
-p_freeze = 0.0
-num_episodes = 1000
+p_stim = 0.1
+p_freeze = 0.1
+num_episodes = 5
 
  
 
