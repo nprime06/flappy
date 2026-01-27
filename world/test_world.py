@@ -12,6 +12,29 @@ import torch
 from PIL import Image
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Cache for the game over sprite
+_gameover_sprite = None
+
+def _load_gameover_sprite():
+    """Load and cache the game over sprite from flappy_bird_gymnasium assets."""
+    global _gameover_sprite
+    if _gameover_sprite is None:
+        import flappy_bird_gymnasium
+        assets_dir = Path(flappy_bird_gymnasium.__file__).parent / "assets" / "sprites"
+        gameover_path = assets_dir / "gameover.png"
+        _gameover_sprite = Image.open(gameover_path).convert("RGBA")
+    return _gameover_sprite
+
+
+def _add_gameover_overlay(img: np.ndarray) -> np.ndarray:
+    """Add the game over sprite overlay to an image."""
+    gameover = _load_gameover_sprite()
+    frame_pil = Image.fromarray(img).convert("RGBA")
+    x = (frame_pil.width - gameover.width) // 2
+    y = int(frame_pil.height * 0.4)
+    frame_pil.paste(gameover, (x, y), gameover)
+    return np.array(frame_pil.convert("RGB"))
 from diffuse.nn.ae import VAE
 from diffuse.nn.resunet import ResUNet
 from diffuse.ngen.sampler import euler_sample, euler_sample_cfg
@@ -317,12 +340,9 @@ def main():
         # Decode and display
         img = latent_to_image(vae, z_display, latent_mean, latent_std)
 
-        # Apply red tint for death frames (when done_prob > threshold or manual mode)
+        # Apply game over overlay for death frames (when done_prob > threshold or manual mode)
         if done_prob > args.done_threshold or manual_death_mode:
-            # Add red tint to indicate death
-            img = img.astype(np.int16)
-            img[:, :, 0] = np.clip(img[:, :, 0] + 100, 0, 255)  # Add red
-            img = img.astype(np.uint8)
+            img = _add_gameover_overlay(img)
 
         # Convert to pygame surface
         surf = pygame.surfarray.make_surface(img.swapaxes(0, 1))

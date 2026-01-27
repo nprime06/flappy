@@ -35,11 +35,14 @@ class LatentTraceDataset(Dataset):
                 continue
 
             actions = {}
+            terminated_flags = {}  # Track which frames have terminated=True
             with open(info_file) as f:
                 for line in f:
                     rec = json.loads(line)
                     if "step" in rec:
                         actions[rec["step"]] = rec["action"]
+                        # Use terminated flag from run_info if available
+                        terminated_flags[rec["step"]] = rec.get("terminated", False)
 
             run_key = str(run_dir)
             self.episode_actions[run_key] = actions
@@ -51,7 +54,8 @@ class LatentTraceDataset(Dataset):
 
             for step in range(k, n_frames):
                 if step in actions:
-                    done = (step == n_frames - 1)  # last frame 
+                    # Use terminated flag from run_info, fallback to last frame
+                    done = terminated_flags.get(step, step == n_frames - 1)
                     sample = (run_key, step, actions[step], done)
                     self.samples.append(sample)
 

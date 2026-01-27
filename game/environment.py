@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple, Union
 
 import numpy as np
+from PIL import Image
 
 import gymnasium as gym
 import imageio.v3 as iio
@@ -35,6 +36,39 @@ import imageio
 
 # Registers "FlappyBird-v0", "FlappyBird-rgb-v0", etc. with gymnasium.
 import flappy_bird_gymnasium  # noqa: F401
+
+# Number of extra frames to record after death (with game over overlay)
+DEATH_FRAMES = 5
+
+# Cache for the game over sprite
+_gameover_sprite = None
+
+def _load_gameover_sprite():
+    """Load and cache the game over sprite from flappy_bird_gymnasium assets."""
+    global _gameover_sprite
+    if _gameover_sprite is None:
+        import flappy_bird_gymnasium
+        assets_dir = Path(flappy_bird_gymnasium.__file__).parent / "assets" / "sprites"
+        gameover_path = assets_dir / "gameover.png"
+        _gameover_sprite = Image.open(gameover_path).convert("RGBA")
+    return _gameover_sprite
+
+def _add_gameover_overlay(frame_np: np.ndarray) -> np.ndarray:
+    """Add the game over sprite overlay to a frame."""
+    gameover = _load_gameover_sprite()
+
+    # Convert frame to PIL Image
+    frame_pil = Image.fromarray(frame_np).convert("RGBA")
+
+    # Calculate position (centered horizontally, upper-middle vertically)
+    x = (frame_pil.width - gameover.width) // 2
+    y = int(frame_pil.height * 0.4)
+
+    # Composite the game over sprite onto the frame
+    frame_pil.paste(gameover, (x, y), gameover)  # Use gameover as mask for transparency
+
+    # Convert back to RGB numpy array
+    return np.array(frame_pil.convert("RGB"))
 
 
 class Agent(Protocol):
@@ -259,6 +293,44 @@ def run_episode(
             if cfg.max_steps is not None and episode_length >= cfg.max_steps:
                 truncated = True
                 break
+
+        # Record extra death frames with game over overlay
+        if terminated and render_mode == "rgb_array" and (frames_dir is not None or video_writer is not None):
+            for death_frame_idx in range(DEATH_FRAMES):
+                frame = env.render()
+                if frame is not None:
+                    frame_np = np.asarray(frame)
+                    # Add game over overlay
+                    frame_np = _add_gameover_overlay(frame_np)
+
+                    if frames_dir is not None:
+                        frame_path = frames_dir / f"{step_idx:06d}.png"
+                        iio.imwrite(frame_path, frame_np)
+                    if video_writer is not None:
+                        video_writer.append_data(frame_np)
+
+                # Log death frame with terminated=True
+                if run_info_f is not None:
+                    run_info_f.write(
+                        json.dumps(
+                            {
+                                "step": step_idx,
+                                "t_wall_s": float(time.time() - t0),
+                                "action": 0,  # No action during death frames
+                                "reward": 0.0,
+                                "terminated": True,
+                                "truncated": False,
+                                "score": int(last_score) if last_score is not None else None,
+                                "processed_obs": None,  # No meaningful obs
+                                "info": {"death_frame": death_frame_idx + 1},
+                            },
+                        )
+                        + "\n"
+                    )
+
+                step_idx += 1
+                episode_length += 1
+
     finally:
         if run_info_f is not None:
             try:
