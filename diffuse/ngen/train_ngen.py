@@ -54,7 +54,7 @@ def is_main_process(rank):
 
 model_config = {
     "in_channels": 4,           # latent_channels from VAE
-    "hidden_channels": 64,
+    "hidden_channels": 256,
     "num_layers": 2,            # limited by odd latent width (18)
     "embed_dim": 128,
     "act_embed_dim": 16,
@@ -66,7 +66,7 @@ model_config = {
 train_config = {
     "lr": 1e-4,
     "num_epochs": 1000,
-    "batch_size": 256,
+    "batch_size": 1024,
     "max_aug_std": 0.5,
     "checkpoint_interval": 200,
     "num_workers": 4,
@@ -101,20 +101,8 @@ def load_flow_model(checkpoint_path, device):
     return model
 
 def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
-    """
-    Train flow matching model with optional DDP support.
-
-    Args:
-        run_dir: Directory to save checkpoints (None = create new)
-        reflow_checkpoint: Path to pre-trained model for reflow training.
-                          If None, use standard flow matching (z_0 ~ N(0,1)).
-        latent_vod: Path to pre-computed latent VOD directory.
-                   If provided, skips VAE encoding (data is already latents).
-    """
-    # Setup DDP (works for single GPU too)
     rank, local_rank, world_size, device = setup_ddp()
     is_main = is_main_process(rank)
-
 
     # load reflow model (no ddp, inference only)
     reflow_generator = None
@@ -177,7 +165,6 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
     latest_ckpt_path = os.path.join(checkpoint_dir, "latest.pt")
     config_path = os.path.join(run_dir, "config.json")
 
-    # Load reflow_checkpoint and latent_vod from config.json if resuming and not provided
     if os.path.exists(config_path):
         with open(config_path, "r") as f:
             saved_config = json.load(f)
@@ -213,8 +200,10 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
         ckpt = torch.load(latest_ckpt_path, map_location=device, weights_only=False)
         raw_model.load_state_dict(ckpt["model"])  # Load to raw model, not DDP wrapper
         optimizer.load_state_dict(ckpt["optimizer"])
+        scheduler.load_state_dict(ckpt["scheduler"])
         start_epoch = ckpt["epoch"]
         total_wall_time = ckpt.get("wall_time_s", 0.0)
+        
         if is_main:
             print(f"Resumed at epoch {start_epoch}")
         if world_size > 1:
@@ -224,11 +213,9 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
     dataset = LatentTraceDataset(latent_vod, k=model_config["context_size"])
 
     sampler = DistributedSampler[Any](dataset, num_replicas=world_size, rank=rank, shuffle=True)
-    # Each DDP process has its own DataLoader with its own workers
-    # Don't scale with world_size - that happens automatically across processes
     dataloader = DataLoader(
         dataset,
-        batch_size=train_config["batch_size"],  # Per-GPU batch size
+        batch_size=train_config["batch_size"],  # per gpu
         sampler=sampler,
         num_workers=train_config["num_workers"],
         pin_memory=True,
@@ -239,7 +226,6 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
         print(f"Dataset size: {len(dataset)} samples")
         print(f"Batches per epoch: {len(dataloader)}")
 
-    # Only main process opens log file
     log_file = open(log_path, "a", buffering=1) if is_main else None
     train_start_t = time.perf_counter()
 
@@ -259,39 +245,32 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
         epoch_done_loss = 0.0
 
         for batch in dataloader:
-            # Unpack batch: past_latents, current_latent, actions (k+1), done
             past_frames, current_frame, actions, done_labels = batch
-            done_labels = done_labels.to(device)
 
             past_frames = past_frames.to(device)
             current_frame = current_frame.to(device)
-            actions = actions.to(device)  # (B, k+1)
+            actions = actions.to(device)
+            done_labels = done_labels.to(device)
 
             B = past_frames.shape[0]
-            z_target = current_frame  # Already normalized latent
-            z_cond = past_frames.flatten(1, 2)  # (B, k*C, H', W')
+            z_target = current_frame
+            z_cond = past_frames.flatten(1, 2)
 
-            # Noise augmentation on conditioning
-            aug_level = torch.randint(0, num_aug_bins, (B,), device=device) # (B,)
-            aug_std = aug_level.float() / num_aug_bins * max_aug_std # (B,)
-            z_cond = z_cond + torch.randn_like(z_cond) * aug_std.view(B, 1, 1, 1) # (B, k*4, H', W')
+            aug_level = torch.randint(0, num_aug_bins, (B,), device=device)
+            aug_std = aug_level.float() / num_aug_bins * max_aug_std
+            z_cond = z_cond + torch.randn_like(z_cond) * aug_std.view(B, 1, 1, 1)
 
-            # CFG dropout: zero out conditioning for a fraction of samples
             if cfg_dropout_prob > 0:
                 cfg_mask = torch.rand(B, device=device) < cfg_dropout_prob
                 z_cond = torch.where(cfg_mask.view(B, 1, 1, 1), torch.zeros_like(z_cond), z_cond)
 
-            # Get z_0 (either from N(0,1) or from reflow generator)
             if reflow_generator is not None:
-                # Reflow: infer z_0 from real z_target by flowing backward
                 z_0 = reflow_generator.generate(z_target, z_cond, actions, aug_level)
-                # z_target stays as real data
             else:
-                z_0 = None  # Will sample from N(0,1) in loss function
+                z_0 = None  # sample from N(0,1) in loss function
 
-            # Compute loss (with bfloat16 for speed)
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                loss, info = flow_matching_loss(
+                loss, done_loss = flow_matching_loss(
                     model, z_target, z_cond, actions, aug_level, z_0=z_0,
                     done_labels=done_labels, done_loss_weight=done_loss_weight,
                     action_weight=action_weight, done_pos_weight=done_pos_weight
@@ -303,7 +282,7 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
             optimizer.step()
 
             epoch_loss += loss.item()
-            epoch_done_loss += info["done_loss"]
+            epoch_done_loss += done_loss.item()
 
         scheduler.step()
 
@@ -334,6 +313,7 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
                 ckpt = {
                     "model": raw_model.state_dict(),  # save raw model, not DDP wrapper
                     "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(),  # save scheduler state
                     "epoch": epoch + 1,
                     "wall_time_s": wall_time_s,
                     "model_config": model_config,

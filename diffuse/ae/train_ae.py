@@ -154,11 +154,10 @@ def train(run_dir=None):
         ckpt = torch.load(latest_ckpt_path, map_location=model_config["device"], weights_only=False)
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
+        scheduler.load_state_dict(ckpt["scheduler"])
         start_epoch = ckpt["epoch"]
         total_wall_time = ckpt.get("wall_time_s", 0.0)
-        # Step scheduler to catch up
-        for _ in range(start_epoch):
-            scheduler.step()
+        
         print(f"Resumed at epoch {start_epoch}")
 
     # Setup data
@@ -248,6 +247,7 @@ def train(run_dir=None):
             ckpt = {
                 "model": model.state_dict(),
                 "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),  # save scheduler state
                 "epoch": epoch + 1,
                 "wall_time_s": wall_time_s,
                 "model_config": model_config,

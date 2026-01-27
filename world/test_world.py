@@ -220,8 +220,11 @@ def main():
 
     print("\nControls:")
     print("  SPACE - Flap")
+    print("  D     - Toggle death mode (red tint preview)")
     print("  Q/ESC - Quit")
     print("\nStarting inference loop...")
+
+    manual_death_mode = False  # For testing red tint
 
     while running:
         # Handle events
@@ -232,6 +235,9 @@ def main():
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_SPACE:
                     action = 1  # flap
+                elif event.key == pygame.K_d:
+                    manual_death_mode = not manual_death_mode
+                    print(f"\nDeath mode: {'ON' if manual_death_mode else 'OFF'}")
                 elif event.key in (pygame.K_q, pygame.K_ESCAPE):
                     running = False
 
@@ -310,6 +316,13 @@ def main():
 
         # Decode and display
         img = latent_to_image(vae, z_display, latent_mean, latent_std)
+
+        # Apply red tint for death frames (when done_prob > threshold or manual mode)
+        if done_prob > args.done_threshold or manual_death_mode:
+            # Add red tint to indicate death
+            img = img.astype(np.int16)
+            img[:, :, 0] = np.clip(img[:, :, 0] + 100, 0, 255)  # Add red
+            img = img.astype(np.uint8)
 
         # Convert to pygame surface
         surf = pygame.surfarray.make_surface(img.swapaxes(0, 1))

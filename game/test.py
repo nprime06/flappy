@@ -15,7 +15,7 @@ def main():
 
     
     render_mode = "human" # headless (none), human, rgb_array
-    env = gym.make(env_id, screen_size=(576, 1024), render_mode=render_mode, disable_env_checker=True, use_lidar=False)
+    env = gym.make(env_id, screen_size=(288, 512), render_mode=render_mode, disable_env_checker=True, use_lidar=False)
     rng = random.Random(seed)
 
     obs, info = env.reset()
@@ -35,6 +35,10 @@ def main():
     truncated = False
 
     obs_list = []
+
+    # Death frame tracking
+    death_frame_count = 0
+    EXTRA_DEATH_FRAMES = 10  # How many frames to render after death
 
     step = 0
     while running:
@@ -71,9 +75,16 @@ def main():
         if not (terminated or truncated):
             obs, reward, terminated, truncated, info = env.step(action)
             obs_list.append(obs)
+            if terminated:
+                print(f"Bird died at step {step}! Rendering {EXTRA_DEATH_FRAMES} extra death frames...")
         else:
-            # headless non-interactive: stop once the episode ends
-            if not interactive:
+            # After death: continue rendering to see what death looks like
+            if death_frame_count < EXTRA_DEATH_FRAMES:
+                env.render()  # Keep rendering the death state
+                death_frame_count += 1
+                print(f"  Death frame {death_frame_count}/{EXTRA_DEATH_FRAMES}")
+            elif not interactive:
+                # headless non-interactive: stop after extra death frames
                 break
 
         # fps cap (pygame clock only when interactive; otherwise sleep)
