@@ -156,7 +156,8 @@ frames/
 .conda/
 *.history.yml
 *.lock.txt
-vod/
+vod/*
+!vod/record.py
 trained_model/
 runs/
 latent-vod/*

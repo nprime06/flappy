@@ -54,13 +54,13 @@ def is_main_process(rank):
 
 model_config = {
     "in_channels": 4,           # latent_channels from VAE
-    "hidden_channels": 256,
+    "hidden_channels": 128,
     "num_layers": 2,            # limited by odd latent width (18)
     "embed_dim": 128,
     "act_embed_dim": 16,
     "num_classes": 2,           # flappy bird: 0=no-flap, 1=flap
     "context_size": 8,               # k frames and actions
-    "num_aug_bins": 8,
+    "num_aug_bins": 16,
 }
 
 train_config = {
