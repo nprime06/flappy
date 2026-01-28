@@ -80,6 +80,27 @@ train_config = {
     "device": "cuda" if torch.cuda.is_available() else "cpu",
 }
 
+def load_weights_from_encode_config(latent_vod_dir):
+    """Load action_weight and done_pos_weight from encode_config.json if available.
+
+    Args:
+        latent_vod_dir: Path to latent-vod directory
+
+    Returns:
+        dict with action_weight and done_pos_weight (may be None if not found)
+    """
+    from pathlib import Path
+    config_path = Path(latent_vod_dir) / "encode_config.json"
+    if config_path.exists():
+        with open(config_path, "r") as f:
+            config = json.load(f)
+        return {
+            "action_weight": config.get("action_weight"),
+            "done_pos_weight": config.get("done_pos_weight"),
+        }
+    return {}
+
+
 def load_flow_model(checkpoint_path, device):
     """Load a pre-trained flow model (for reflow)."""
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -123,7 +144,7 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
         num_classes=model_config["num_classes"],
         context_size=model_config["context_size"],
         num_aug_bins=model_config["num_aug_bins"],
-    ).to(device, memory_format=torch.channels_last)
+    ).to(device)
 
     if is_main:
         num_params = sum(p.numel() for p in model.parameters())
@@ -179,6 +200,18 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
                 latent_vod = saved_config.get("latent_vod")
                 if latent_vod and is_main:
                     print(f"Loaded latent_vod from config: {latent_vod}")
+
+    # Load weights from encode_config.json if available
+    if latent_vod:
+        encode_weights = load_weights_from_encode_config(latent_vod)
+        if encode_weights.get("action_weight") is not None:
+            train_config["action_weight"] = encode_weights["action_weight"]
+            if is_main:
+                print(f"Using action_weight={encode_weights['action_weight']} from encode_config.json")
+        if encode_weights.get("done_pos_weight") is not None:
+            train_config["done_pos_weight"] = encode_weights["done_pos_weight"]
+            if is_main:
+                print(f"Using done_pos_weight={encode_weights['done_pos_weight']} from encode_config.json")
 
     if is_main:
         print(f"Run directory: {run_dir}")
@@ -252,8 +285,8 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
         for batch in dataloader:
             past_frames, current_frame, actions, done_labels = batch
 
-            past_frames = past_frames.to(device, non_blocking=True, memory_format=torch.channels_last)
-            current_frame = current_frame.to(device, non_blocking=True, memory_format=torch.channels_last)
+            past_frames = past_frames.to(device, non_blocking=True)
+            current_frame = current_frame.to(device, non_blocking=True)
             actions = actions.to(device, non_blocking=True)
             done_labels = done_labels.to(device, non_blocking=True)
 

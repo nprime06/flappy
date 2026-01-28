@@ -3,17 +3,21 @@
 import argparse
 import json
 import os
+import random
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 from tqdm import tqdm
 
 import math
 import torch
 import torch.nn.functional as F
+from PIL import Image
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
+from torchvision import transforms
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from nn.ae import VAE
@@ -99,13 +103,61 @@ def weighted_l1_loss(recon, target, weights):
     return (weights * (recon - target).abs()).mean()
 
 
+def compute_latent_statistics(model, data_dir, num_samples=500, device="cuda"):
+    """Compute latent mean and std from random samples.
+    
+    Args:
+        model: Trained VAE model
+        data_dir: Directory containing video frames
+        num_samples: Number of random frames to sample
+        device: Device to run on
+        
+    Returns:
+        dict with 'latent_mean' and 'latent_std'
+    """
+    model.eval()
+    
+    # Gather random frame paths
+    frame_paths = list(Path(data_dir).glob("*/*/frames/*.png"))
+    if len(frame_paths) == 0:
+        raise ValueError(f"No frames found in {data_dir}")
+    
+    frame_paths = random.sample(frame_paths, min(num_samples, len(frame_paths)))
+    print(f"Computing latent statistics from {len(frame_paths)} frames...")
+    
+    # Transform (same as training)
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+    ])
+    
+    # Encode all frames
+    latents = []
+    with torch.no_grad():
+        for path in frame_paths:
+            img = Image.open(path).convert("RGB")
+            x = transform(img).unsqueeze(0).to(device)
+            encoded = model.encoder(x)
+            z, _, _ = model.reparameterize(encoded, sample=False)  # use mean
+            latents.append(z)
+    
+    latents = torch.cat(latents, dim=0)
+    latent_mean = latents.mean().item()
+    latent_std = latents.std().item()
+    
+    print(f"Latent mean: {latent_mean:.4f}")
+    print(f"Latent std: {latent_std:.4f}")
+    
+    return {"latent_mean": latent_mean, "latent_std": latent_std}
+
+
 def train(run_dir=None):
     model = VAE(
         image_channels=model_config["image_channels"],
         hidden_channels=model_config["hidden_channels"],
         latent_channels=model_config["latent_channels"],
         num_layers=model_config["num_layers"],
-    ).to(model_config["device"], memory_format=torch.channels_last)
+    ).to(model_config["device"])
 
     decoder_params = sum(p.numel() for p in model.decoder.parameters())
     encoder_params = sum(p.numel() for p in model.encoder.parameters())
@@ -190,7 +242,7 @@ def train(run_dir=None):
         epoch_kl = 0.0
 
         for batch in dataloader:
-            batch = batch.to(model_config["device"], non_blocking=True, memory_format=torch.channels_last)
+            batch = batch.to(model_config["device"], non_blocking=True)
 
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 encoded = model.encoder(batch)
@@ -263,6 +315,41 @@ def train(run_dir=None):
             torch.save(ckpt, os.path.join(checkpoint_dir, f"ep_{epoch+1:05d}.pt"))
 
     log_file.close()
+    
+    # Compute and save latent statistics
+    print("\nComputing latent statistics...")
+    try:
+        # Temporarily disable torch.compile for statistics computation
+        # (compile can interfere with eval mode)
+        if hasattr(model, '_orig_mod'):
+            model_for_stats = model._orig_mod
+        else:
+            model_for_stats = model
+        
+        stats = compute_latent_statistics(
+            model_for_stats, 
+            train_config["data_dir"], 
+            num_samples=500,
+            device=model_config["device"]
+        )
+        
+        # Load existing config and update with statistics
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                config = json.load(f)
+        else:
+            config = train_config.copy()
+        
+        config.update(stats)
+        
+        # Save updated config
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+        
+        print(f"Saved latent statistics to {config_path}")
+    except Exception as e:
+        print(f"Warning: Failed to compute latent statistics: {e}")
+    
     print(f"\nTraining complete. Run directory: {run_dir}")
 
 

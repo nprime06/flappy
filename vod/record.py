@@ -10,22 +10,14 @@ from tqdm import tqdm
 
 PPO_RUN_ID = "20260108_034928"
 CHECKPOINT = "latest.pt"
-# uses trained PPO checkpoint
-
-p_stim = 0.1
-p_freeze = 0.1
-num_episodes = 5
 
 episode_counts = {
-    (0.0, 0.0): 0,
-    "p_stim_0.1_p_freeze_0.1": 0,
+    (0.0, 0.0): 5,
+    (0.1, 0.1): 5,
 }
 
- 
-
 RUNS_DIR = "/Users/william/Desktop/Random/flappy/game/rl/runs"
-OUTPUT_DIR = f"/Users/william/Desktop/Random/flappy/vod/p_stim_{p_stim}_p_freeze_{p_freeze}"
-
+VOD_BASE_DIR = "/Users/william/Desktop/Random/flappy/vod"
 
 class HijackedPPOAgent(PPOAgent):
     def __init__(self, model, device, p_stim: float, p_freeze: float):
@@ -62,20 +54,24 @@ def main():
     model.load_state_dict(ckpt["model"])
     model.eval()
 
-    agent = HijackedPPOAgent(model, device, p_stim=p_stim, p_freeze=p_freeze)
+    for (p_stim, p_freeze), num_episodes in episode_counts.items():
+        print(f"\n=== Recording {num_episodes} episodes with p_stim={p_stim}, p_freeze={p_freeze} ===")
 
-    cfg = RunConfig(
-        out_dir=OUTPUT_DIR,
-        save_run_info=True,
-        save_frames=True,
-        save_video=False,
-    )
+        agent = HijackedPPOAgent(model, device, p_stim=p_stim, p_freeze=p_freeze)
+        output_dir = os.path.join(VOD_BASE_DIR, f"p_stim_{p_stim}_p_freeze_{p_freeze}")
 
-    total_length = 0
-    for step in range(num_episodes): 
-        result = run_episode(agent, cfg)
-        total_length += result.episode_length
-        print(f"Step {step + 1}/{num_episodes}; Episode length: {result.episode_length/30:.2f}s; total length: {total_length/30:.2f}s")
+        cfg = RunConfig(
+            out_dir=output_dir,
+            save_run_info=True,
+            save_frames=True,
+            save_video=False,
+        )
+
+        total_length = 0
+        for ep in range(num_episodes):
+            result = run_episode(agent, cfg)
+            total_length += result.episode_length
+            print(f"  Episode {ep + 1}/{num_episodes}; length: {result.episode_length/30:.2f}s; total: {total_length/30:.2f}s")
 
 if __name__ == "__main__":
     main()

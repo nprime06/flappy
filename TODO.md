@@ -727,12 +727,26 @@ Additional performance optimizations:
 
 | File | Change | Impact |
 |------|--------|--------|
-| `diffuse/ae/train_ae.py` | Added `prefetch_factor=2`, `drop_last=True`, `non_blocking=True`, `channels_last`, `torch.compile(mode="reduce-overhead")` | Better GPU utilization, static shapes for compile |
+| `diffuse/ae/train_ae.py` | Added `prefetch_factor=2`, `drop_last=True`, `non_blocking=True`, `torch.compile(mode="reduce-overhead")` | Better GPU utilization, static shapes for compile |
 | `diffuse/ngen/train_ngen.py` | Same DataLoader + memory format + compile optimizations | Same benefits |
 | `diffuse/ngen/sampler.py` | Changed `@torch.no_grad()` to `@torch.inference_mode()` | Slightly faster inference |
 | `latent-vod/encode_vod.py` | Changed `torch.no_grad()` to `torch.inference_mode()` | Slightly faster encoding |
 | `vod/record.py` | Changed `torch.no_grad()` to `torch.inference_mode()` | Slightly faster inference |
 
 **Note:** `torch.compile` with `reduce-overhead` uses CUDA graphs. May still be memory-expensive - if so, try `mode="default"` instead.
+
+---
+
+# Removed channels_last Memory Format (1/27)
+
+Removed all `memory_format=torch.channels_last` optimizations from the codebase:
+
+- **Reason**: Caused `RuntimeError: required rank 4 tensor to use channels_last format` when applied to rank 5 tensors (`past_frames` with shape `[batch, k, channels, H, W]`). This is a late-stage optimization that's not essential for correctness.
+
+- **Files modified**:
+  - `diffuse/ngen/train_ngen.py`: Removed from model `.to(device)` and tensor transfers (3 occurrences)
+  - `diffuse/ae/train_ae.py`: Removed from model `.to(device)` and batch transfers (2 occurrences)
+
+- **Impact**: Minimal performance difference expected. The default NCHW memory format works fine for this use case.
 
 ---
