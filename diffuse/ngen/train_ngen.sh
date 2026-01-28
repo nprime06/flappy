@@ -25,5 +25,5 @@ echo "  CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES:-not set}"
 
 # Use torchrun for DDP support (works with single GPU too)
 torchrun --standalone --nproc_per_node=$NUM_GPUS \
-    --show_error_traceback \
+    --show-error-traceback \
     /home/willzhao/flappy/diffuse/ngen/train_ngen.py $TRAIN_ARGS
