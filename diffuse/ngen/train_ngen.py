@@ -123,11 +123,14 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
         num_classes=model_config["num_classes"],
         context_size=model_config["context_size"],
         num_aug_bins=model_config["num_aug_bins"],
-    ).to(device)
+    ).to(device, memory_format=torch.channels_last)
 
     if is_main:
         num_params = sum(p.numel() for p in model.parameters())
         print(f"Flow model has {num_params:,} parameters")
+
+    # Compile model for faster training (before DDP wrapping)
+    model = torch.compile(model, mode="reduce-overhead", dynamic=False)
 
     # Wrap in DDP if multi-GPU
     if world_size > 1:
@@ -220,6 +223,8 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
         num_workers=train_config["num_workers"],
         pin_memory=True,
         persistent_workers=True,
+        prefetch_factor=2,
+        drop_last=True,  # Required for torch.compile with static shapes
     )
 
     if is_main:
@@ -247,10 +252,10 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
         for batch in dataloader:
             past_frames, current_frame, actions, done_labels = batch
 
-            past_frames = past_frames.to(device)
-            current_frame = current_frame.to(device)
-            actions = actions.to(device)
-            done_labels = done_labels.to(device)
+            past_frames = past_frames.to(device, non_blocking=True, memory_format=torch.channels_last)
+            current_frame = current_frame.to(device, non_blocking=True, memory_format=torch.channels_last)
+            actions = actions.to(device, non_blocking=True)
+            done_labels = done_labels.to(device, non_blocking=True)
 
             B = past_frames.shape[0]
             z_target = current_frame

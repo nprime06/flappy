@@ -71,7 +71,7 @@ def encode_run(vae, frames_dir, batch_size, device):
             batch_images.append(transform(img))
 
         batch_tensor = torch.stack(batch_images).to(device)
-        with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             latents = encode(vae, batch_tensor)
 
         all_latents.append(latents.cpu())

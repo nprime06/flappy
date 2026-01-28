@@ -105,12 +105,15 @@ def train(run_dir=None):
         hidden_channels=model_config["hidden_channels"],
         latent_channels=model_config["latent_channels"],
         num_layers=model_config["num_layers"],
-    ).to(model_config["device"])
+    ).to(model_config["device"], memory_format=torch.channels_last)
 
     decoder_params = sum(p.numel() for p in model.decoder.parameters())
     encoder_params = sum(p.numel() for p in model.encoder.parameters())
     print(f"Decoder has {decoder_params:,} parameters")
     print(f"Encoder has {encoder_params:,} parameters")
+
+    # Compile model for faster training (requires static shapes via drop_last=True)
+    model = torch.compile(model, mode="reduce-overhead", dynamic=False)
 
     optimizer = AdamW(model.parameters(), lr=train_config["lr"])
 
@@ -169,6 +172,8 @@ def train(run_dir=None):
         num_workers=train_config["num_workers"],
         pin_memory=True,
         persistent_workers=True,
+        prefetch_factor=2,
+        drop_last=True,  # Required for torch.compile with static shapes
     )
 
     print(f"Dataset size: {len(dataset)} frames")
@@ -185,23 +190,24 @@ def train(run_dir=None):
         epoch_kl = 0.0
 
         for batch in dataloader:
-            batch = batch.to(model_config["device"])
+            batch = batch.to(model_config["device"], non_blocking=True, memory_format=torch.channels_last)
 
-            encoded = model.encoder(batch)
-            z, mean, logvar = model.reparameterize(encoded, sample=True)
-            recon = model.decoder(z)
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                encoded = model.encoder(batch)
+                z, mean, logvar = model.reparameterize(encoded, sample=True)
+                recon = model.decoder(z)
 
-            # Downsample target if decoder outputs lower resolution
-            target = batch
-            if recon.shape[-2:] != batch.shape[-2:]:
-                target = F.interpolate(batch, size=recon.shape[-2:], mode='area')
+                # Downsample target if decoder outputs lower resolution
+                target = batch
+                if recon.shape[-2:] != batch.shape[-2:]:
+                    target = F.interpolate(batch, size=recon.shape[-2:], mode='area')
 
-            # Weighted L1 loss: higher weight on bird region
-            bird_weights = get_bird_weight_mask(target, bird_weight=train_config["bird_weight"])
-            l1_loss = weighted_l1_loss(recon, target, bird_weights)
-            grad_loss = gradient_loss(recon, target)
-            kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
-            loss = l1_loss + train_config["grad_weight"] * grad_loss + train_config["kl_weight"] * kl_loss
+                # Weighted L1 loss: higher weight on bird region
+                bird_weights = get_bird_weight_mask(target, bird_weight=train_config["bird_weight"])
+                l1_loss = weighted_l1_loss(recon, target, bird_weights)
+                grad_loss = gradient_loss(recon, target)
+                kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
+                loss = l1_loss + train_config["grad_weight"] * grad_loss + train_config["kl_weight"] * kl_loss
 
             optimizer.zero_grad()
             loss.backward()

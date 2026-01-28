@@ -1,6 +1,6 @@
 import torch
 
-@torch.no_grad()
+@torch.inference_mode()
 def euler_sample(model, z_0, z_cond, actions, aug_level, num_steps=50, clamp_range=4.0):
     B = z_0.shape[0]
     device = z_0.device
@@ -15,7 +15,7 @@ def euler_sample(model, z_0, z_cond, actions, aug_level, num_steps=50, clamp_ran
     return z
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def euler_sample_backward(model, z_1, z_cond, actions, aug_level, num_steps=50, clamp_range=4.0):
     B = z_1.shape[0]
     device = z_1.device
@@ -30,7 +30,7 @@ def euler_sample_backward(model, z_1, z_cond, actions, aug_level, num_steps=50, 
     return z
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def euler_sample_cfg(model, z_0, z_cond, actions, aug_level, cfg_scale=1.5, num_steps=50, clamp_range=4.0):
     """
     Sample from flow model using Euler ODE solver with Classifier-Free Guidance.

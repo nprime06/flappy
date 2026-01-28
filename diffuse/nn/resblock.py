@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def get_groups(channels, max_groups=16):
@@ -60,13 +61,14 @@ class DownResBlock(nn.Module):
 class UpResBlock(nn.Module):
     def __init__(self, fan_in, fan_out, embed_dim):
         super().__init__()
-        self.up = nn.ConvTranspose2d(fan_in, fan_out, kernel_size=4, stride=2, padding=1)
+        self.up = nn.Conv2d(fan_in, fan_out, kernel_size=3, padding=1)
         if embed_dim is None:
             self.res = ResBlock(fan_out, fan_out, embed_dim=None)
         else:
             self.res = ResBlock(fan_out * 2, fan_out, embed_dim)
 
     def forward(self, x, skip, t_emb=None, c_emb=None, aug_emb=None):
+        x = F.interpolate(x, scale_factor=2, mode='nearest')
         x = self.up(x)
         if skip is not None:
             x = torch.cat([x, skip], dim=1)

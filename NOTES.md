@@ -33,3 +33,6 @@ think carefully abt reflow, we still have to train with noise aug, etc. only dif
 
 
 Change vod/record.py to take input flags for consistency
+
+
+Doing detailed ablation study for the optimizations we used? idk 

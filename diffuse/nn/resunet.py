@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 from .embedding import TimeEmbedding
 from .resblock import ResBlock, DownResBlock, UpResBlock
 
@@ -52,14 +53,14 @@ class ResUNet(nn.Module):  # context_size = k (number of context latent frames)
 
         skip_connections = []
         for down_block in self.down_blocks:
-            x, skip = down_block(x, t_emb, c_emb, aug_emb)
+            x, skip = checkpoint(down_block, x, t_emb, c_emb, aug_emb, use_reentrant=False)
             skip_connections.append(skip)
-        x = self.bot(x, t_emb, c_emb, aug_emb)
+        x = checkpoint(self.bot, x, t_emb, c_emb, aug_emb, use_reentrant=False)
 
         done_logit = self.done_head(x)
 
         for up_block in self.up_blocks:
-            x = up_block(x, skip_connections.pop(), t_emb, c_emb, aug_emb)
+            x = checkpoint(up_block, x, skip_connections.pop(), t_emb, c_emb, aug_emb, use_reentrant=False)
         x = self.out_conv(x)
 
         return x, done_logit

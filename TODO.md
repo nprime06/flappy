@@ -706,3 +706,33 @@ After retraining with loss reweighting:
 | `diffuse/ngen/loss.py` | Support per-sample weighted flow loss |
 
 ---
+
+# Optimizations 1/27
+
+Memory and performance optimizations applied:
+
+| File | Change | Impact |
+|------|--------|--------|
+| `diffuse/ae/train_ae.py` | Added bfloat16 autocast (was missing, ngen already had it) | ~2x memory, ~30% speedup |
+| `diffuse/nn/resunet.py` | Added gradient checkpointing to forward pass | ~25% compute cost for ~50% memory reduction |
+| `diffuse/nn/resblock.py` | Replaced ConvTranspose2d with interpolate+conv in UpResBlock | Lower memory, avoids checkerboard artifacts |
+
+**Note:** The UpResBlock change affects both VAE decoder and ResUNet. Existing checkpoints won't load (different weight shapes) - requires retraining.
+
+---
+
+# Optimizations 1/27 (Part 2)
+
+Additional performance optimizations:
+
+| File | Change | Impact |
+|------|--------|--------|
+| `diffuse/ae/train_ae.py` | Added `prefetch_factor=2`, `drop_last=True`, `non_blocking=True`, `channels_last`, `torch.compile(mode="reduce-overhead")` | Better GPU utilization, static shapes for compile |
+| `diffuse/ngen/train_ngen.py` | Same DataLoader + memory format + compile optimizations | Same benefits |
+| `diffuse/ngen/sampler.py` | Changed `@torch.no_grad()` to `@torch.inference_mode()` | Slightly faster inference |
+| `latent-vod/encode_vod.py` | Changed `torch.no_grad()` to `torch.inference_mode()` | Slightly faster encoding |
+| `vod/record.py` | Changed `torch.no_grad()` to `torch.inference_mode()` | Slightly faster inference |
+
+**Note:** `torch.compile` with `reduce-overhead` uses CUDA graphs. May still be memory-expensive - if so, try `mode="default"` instead.
+
+---

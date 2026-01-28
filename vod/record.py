@@ -8,13 +8,18 @@ from game.environment import run_episode, RunConfig
 from game.rl.train_ppo import ActorCritic, PPOAgent
 from tqdm import tqdm
 
-RUN_ID = "20260108_034928"
+PPO_RUN_ID = "20260108_034928"
 CHECKPOINT = "latest.pt"
 # uses trained PPO checkpoint
 
 p_stim = 0.1
 p_freeze = 0.1
 num_episodes = 5
+
+episode_counts = {
+    (0.0, 0.0): 0,
+    "p_stim_0.1_p_freeze_0.1": 0,
+}
 
  
 
@@ -30,7 +35,7 @@ class HijackedPPOAgent(PPOAgent):
 
     def act(self, obs):
         obs_t = torch.FloatTensor(obs).unsqueeze(0).to(self.device)
-        with torch.no_grad():
+        with torch.inference_mode():
             prob, _value = self.model(obs_t)
             dist = torch.distributions.Bernoulli(prob)
             action = dist.sample()  # tensor scalar {0,1}
@@ -49,7 +54,7 @@ class HijackedPPOAgent(PPOAgent):
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    checkpoint_path = os.path.join(RUNS_DIR, f"ppo_{RUN_ID}", "checkpoints", CHECKPOINT)
+    checkpoint_path = os.path.join(RUNS_DIR, f"ppo_{PPO_RUN_ID}", "checkpoints", CHECKPOINT)
     print(f"Loading checkpoint: {checkpoint_path}")
 
     model = ActorCritic(obs_dim=3).to(device)
