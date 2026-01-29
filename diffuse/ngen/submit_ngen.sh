@@ -1,24 +1,25 @@
 #!/bin/bash
-# Wrapper script to submit NGEN training job with proper GPU allocation
+# wrapper to submit ngen training job
 #
 # USAGE:
-#   ./submit_ngen.sh                           # New run, 1 GPU (uses default latent-vod)
-#   ./submit_ngen.sh --gpus 4                  # New run, 4 GPUs
-#   ./submit_ngen.sh --run-dir /path/to/run    # Resume existing run (use full absolute path)
-#   ./submit_ngen.sh --reflow /path/to/ckpt    # Reflow training
-#   ./submit_ngen.sh --latent-vod /path/to/dir # Override latent-vod directory
-#   ./submit_ngen.sh --gpus 4 --run-dir /path  # Resume with 4 GPUs (use full absolute path)
+#   ./submit_ngen.sh --latent-vod /path/to/dir
+#   ./submit_ngen.sh --latent-vod /path/to/dir --gpus 2
+#   ./submit_ngen.sh --latent-vod /path/to/dir --run-dir /path/to/run    # resume existing run (use full absolute path)
+#   ./submit_ngen.sh --latent-vod /path/to/dir --reflow /path/to/ckpt    # reflow
 
 set -euo pipefail
 
-# Defaults
-NUM_GPUS=1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN_DIR=""
 REFLOW=""
-LATENT_VOD="/home/willzhao/flappy/latent-vod"
+LATENT_VOD=""
+NUM_GPUS=1
+CPUS_PER_GPU=8
+MEM_PER_GPU=128
+NUM_CPUS=$((NUM_GPUS * CPUS_PER_GPU))
+TOTAL_MEM=$((NUM_GPUS * MEM_PER_GPU))
 TIME="6:00:00"
 
-# Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
         --gpus)
@@ -37,26 +38,22 @@ while [[ $# -gt 0 ]]; do
             LATENT_VOD="$2"
             shift 2
             ;;
-        --time)
-            TIME="$2"
-            shift 2
-            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--gpus N] [--run-dir DIR] [--reflow CKPT] [--latent-vod DIR] [--time HH:MM:SS]"
+            echo "Usage: $0 --latent-vod DIR [--gpus N] [--run-dir DIR] [--reflow CKPT]"
             exit 1
             ;;
     esac
 done
 
-# Calculate resources based on GPU count
-CPUS_PER_GPU=8
-NUM_CPUS=$((NUM_GPUS * CPUS_PER_GPU))
-MEM_PER_GPU=128
-TOTAL_MEM=$((NUM_GPUS * MEM_PER_GPU))
+if [[ -z "$LATENT_VOD" ]]; then
+    echo "Error: --latent-vod is required"
+    echo "Usage: $0 --latent-vod DIR [--gpus N] [--run-dir DIR] [--reflow CKPT]"
+    exit 1
+fi
 
-# Create run directory if not resuming (so logs go there)
-RUNS_DIR="/home/willzhao/flappy/diffuse/ngen/runs"
+# create run directory if not resuming
+RUNS_DIR="${SCRIPT_DIR}/runs"
 if [[ -z "$RUN_DIR" ]]; then
     TIMESTAMP=$(date +%Y%m%d_%H%M%S)
     if [[ -n "$REFLOW" ]]; then
@@ -68,29 +65,13 @@ if [[ -z "$RUN_DIR" ]]; then
 fi
 mkdir -p "$RUN_DIR"
 
-# Build train script arguments
+# build train script arguments
 TRAIN_ARGS="--run-dir $RUN_DIR"
 if [[ -n "$REFLOW" ]]; then
     TRAIN_ARGS="$TRAIN_ARGS --reflow $REFLOW"
 fi
-if [[ -n "$LATENT_VOD" ]]; then
-    TRAIN_ARGS="$TRAIN_ARGS --latent-vod $LATENT_VOD"
-fi
+TRAIN_ARGS="$TRAIN_ARGS --latent-vod $LATENT_VOD"
 
-echo "Submitting NGEN training job:"
-echo "  GPUs: $NUM_GPUS"
-echo "  CPUs: $NUM_CPUS"
-echo "  Memory: ${TOTAL_MEM}G"
-echo "  Time: $TIME"
-echo "  Run dir: $RUN_DIR"
-if [[ -n "$REFLOW" ]]; then
-    echo "  Reflow: $REFLOW"
-fi
-if [[ -n "$LATENT_VOD" ]]; then
-    echo "  Latent VOD: $LATENT_VOD"
-fi
-
-# Submit job with dynamic resource allocation
 sbatch \
     --job-name=ngen-train \
     --partition=mit_normal_gpu \
@@ -103,6 +84,6 @@ sbatch \
     --output="${RUN_DIR}/slurm-%j.log" \
     --error="${RUN_DIR}/slurm-%j.err" \
     --export=ALL,NUM_GPUS=$NUM_GPUS,TRAIN_ARGS="$TRAIN_ARGS" \
-    /home/willzhao/flappy/diffuse/ngen/train_ngen.sh
+    "${SCRIPT_DIR}/train_ngen.sh"
 
-echo "Job submitted. Logs will be in: $RUN_DIR"
+echo "logs in $RUN_DIR"

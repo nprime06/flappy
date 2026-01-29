@@ -41,4 +41,31 @@ Doing detailed ablation study for the optimizations we used? idk
 Note that in CFG we zero out the conditioning latents, instead of normal (where we have a dedicated null token/class). slightly weird. idk
 
 
-important! clean up absolute paths and stuff
+
+
+Things to clean: 
+game/
+- environment.py
+- combine test_environment and test (one is play one is record)
+- game/rl is huge mess
+
+vod/record DONE!
+
+diffuse/
+- just check for correctness and stuff in ngen
+- ngen/sampler is horrible
+- vae is messy DONE!
+- fix vae/visualize/visualize.py
+
+latent-vod/ is messy DONE!
+
+world/
+- test_world.py
+
+
+FINAL round of things to clean: 
+- important! clean up absolute paths and stuff
+- combine notes, explain, todo, readme -> readme
+
+
+as of 1/29, we have 4710.70s of data = 1.3hr = 141321 frames

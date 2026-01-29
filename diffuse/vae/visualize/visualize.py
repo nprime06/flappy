@@ -15,109 +15,168 @@ import imageio
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from nn.vae import VAE
 
-# Get the directory of this file for default output paths
+# Constants
 VISUALIZE_DIR = Path(__file__).parent
 
-def load_random_frame(vod_dir):
-    frame_paths = sorted(Path(vod_dir).glob("*/*/frames/*.png"))
-    path = random.choice(frame_paths)
-    img = Image.open(path).convert("RGB")
-    tensor = transforms.ToTensor()(img)  # [0, 1]
-    tensor = tensor * 2 - 1  # [-1, 1]
-    return tensor, path
+# Bird detection parameters
+BIRD_X_MIN = 50
+BIRD_X_MAX = 100
+BIRD_HEIGHT = 35
+BIRD_Y_OFFSET = 23
+BIRD_COLOR_RANGE = {
+    "r_min": 0.8,
+    "g_min": 0.3,
+    "g_max": 0.6,
+    "b_max": 0.3,
+}
 
 
+# Helper functions
 def tensor_to_display(tensor):
-    """Convert tensor from [-1, 1] to numpy array for display."""
-    img = (tensor + 1) / 2  # back to [0, 1]
+    """Convert tensor from [-1, 1] to numpy array for display [0, 1]."""
+    img = (tensor + 1) / 2
     img = img.clamp(0, 1)
     return img.permute(1, 2, 0).numpy()
 
 
-def visualize_downsample(vod_dir, scale_factor=0.5, modes=("area", "bilinear"), 
-                          output_path=None, num_frames=30, fps=30):
-    """Compare original frames with downsampled versions using different modes and create a GIF."""
-    if output_path is None:
-        output_path = VISUALIZE_DIR / "downsample.gif"
-    output_path = str(output_path)  # Convert Path to string for imageio
-
-    # Find all episode directories and pick a random one
+def load_frames_from_episode(vod_dir, num_frames):
+    """Load contiguous frames from a random episode directory.
+    
+    Returns:
+        tuple: (batch tensor, frame_paths, episode_dir, start_idx)
+    """
     episode_dirs = sorted(Path(vod_dir).glob("*/*/frames"))
     episode_dir = random.choice(episode_dirs)
     frame_paths = sorted(episode_dir.glob("*.png"))
-
-    # Pick a random starting point that allows num_frames contiguous frames
+    
     max_start = max(0, len(frame_paths) - num_frames)
     start_idx = random.randint(0, max_start)
     frame_paths = frame_paths[start_idx:start_idx + num_frames]
-
+    
     print(f"Episode: {episode_dir}")
     print(f"Frames {start_idx} to {start_idx + len(frame_paths) - 1}")
-
-    # Load frames as batch
+    
     frames = []
     for path in frame_paths:
         img = Image.open(path).convert("RGB")
         tensor = transforms.ToTensor()(img) * 2 - 1  # [-1, 1]
         frames.append(tensor)
-    batch = torch.stack(frames)
-
-    print(f"Original shape: {batch.shape}")
-
-    # Create GIF frames showing original and downsampled versions side by side
-    gif_frames = []
-    n_modes = len(modes)
     
-    for i in range(len(frames)):
+    batch = torch.stack(frames)
+    return batch, frame_paths, episode_dir, start_idx
+
+
+def save_gif(frames, output_path, fps=30):
+    """Save a list of numpy arrays as a GIF."""
+    output_path = str(output_path)
+    imageio.mimsave(output_path, frames, fps=fps)
+    print(f"Saved GIF to: {output_path}")
+
+
+def load_vae_model(checkpoint_path, device="cpu"):
+    """Load VAE model from checkpoint."""
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    config = ckpt.get("model_config", {})
+    
+    model = VAE(
+        image_channels=config.get("image_channels", 3),
+        hidden_channels=config.get("hidden_channels", 16),
+        latent_channels=config.get("latent_channels", 4),
+        num_layers=config.get("num_layers", 4),
+        decoder_hidden_channels=config.get("decoder_hidden_channels"),
+        decoder_num_layers=config.get("decoder_num_layers"),
+    ).to(device)
+    
+    model.load_state_dict(ckpt["model"])
+    model.eval()
+    
+    print(f"Loaded checkpoint: {checkpoint_path}")
+    print(f"Epoch: {ckpt.get('epoch', 'unknown')}")
+    
+    return model
+
+
+def detect_bird_bbox(img_tensor):
+    """Detect bird bounding box from image tensor.
+    
+    Args:
+        img_tensor: Tensor in [-1, 1] format
+        
+    Returns:
+        tuple or None: (x_min, y_min, x_max, y_max) or None if not detected
+    """
+    img = (img_tensor + 1) / 2  # [0, 1]
+    r, g, b = img[0], img[1], img[2]
+    
+    bird_mask = (
+        (r > BIRD_COLOR_RANGE["r_min"]) &
+        (g > BIRD_COLOR_RANGE["g_min"]) &
+        (g < BIRD_COLOR_RANGE["g_max"]) &
+        (b < BIRD_COLOR_RANGE["b_max"])
+    )
+    
+    if not bird_mask.any():
+        return None
+    
+    H, W = bird_mask.shape
+    rows = bird_mask.any(dim=1).nonzero(as_tuple=True)[0]
+    y_min = rows.min().item() - BIRD_Y_OFFSET
+    y_max = min(H - 1, y_min + BIRD_HEIGHT)
+    
+    return (BIRD_X_MIN, y_min, BIRD_X_MAX, y_max)
+
+
+# Visualization functions
+def visualize_downsample(vod_dir, scale_factor=0.5, modes=("area", "bilinear"),
+                         output_path=None, num_frames=30, fps=30):
+    """Compare original frames with downsampled versions using different modes and create a GIF."""
+    if output_path is None:
+        output_path = VISUALIZE_DIR / "downsample.gif"
+    
+    batch, frame_paths, episode_dir, start_idx = load_frames_from_episode(vod_dir, num_frames)
+    print(f"Original shape: {batch.shape}")
+    
+    gif_frames = []
+    for i in range(len(batch)):
         frame_tensor = batch[i]
         frame_batch = frame_tensor.unsqueeze(0)
         
-        # Get original frame for display
         orig_display = tensor_to_display(frame_tensor)
-        
-        # Create downsampled versions
         downsampled_displays = []
+        
         for mode in modes:
-            downsampled = F.interpolate(frame_batch, scale_factor=scale_factor, mode=mode)
-            downsampled = downsampled.squeeze(0)
-            # Upsample back to original size for side-by-side comparison
+            downsampled = F.interpolate(frame_batch, scale_factor=scale_factor, mode=mode).squeeze(0)
             downsampled_upsampled = F.interpolate(
-                downsampled.unsqueeze(0), 
-                size=frame_tensor.shape[-2:], 
-                mode='bilinear', 
+                downsampled.unsqueeze(0),
+                size=frame_tensor.shape[-2:],
+                mode='bilinear',
                 align_corners=False
             ).squeeze(0)
             downsampled_displays.append(tensor_to_display(downsampled_upsampled))
-            if i == 0:  # Print shape info only for first frame
+            
+            if i == 0:
                 print(f"{mode} shape: {downsampled.shape}")
         
-        # Concatenate original and all downsampled versions horizontally
         combined = np.concatenate([orig_display] + downsampled_displays, axis=1)
-        # Convert to uint8
-        combined = (combined * 255).astype(np.uint8)
-        gif_frames.append(combined)
-
-    # Save GIF
-    imageio.mimsave(output_path, gif_frames, fps=fps)
-    print(f"Saved GIF to: {output_path}")
-
-    # Also show first frame comparison
+        gif_frames.append((combined * 255).astype(np.uint8))
+    
+    save_gif(gif_frames, output_path, fps)
+    
+    # Show first frame comparison
     n_cols = 1 + len(modes)
     fig, axes = plt.subplots(1, n_cols, figsize=(5 * n_cols, 5))
     
-    # Original
     axes[0].imshow(tensor_to_display(batch[0]))
     axes[0].set_title(f"Original\n{batch.shape[2]}x{batch.shape[3]}")
     axes[0].axis("off")
     
-    # Downsampled versions (upsampled for display)
     frame_batch = batch[0:1]
     for i, mode in enumerate(modes):
         downsampled = F.interpolate(frame_batch, scale_factor=scale_factor, mode=mode)
         downsampled_upsampled = F.interpolate(
-            downsampled, 
-            size=batch.shape[-2:], 
-            mode='bilinear', 
+            downsampled,
+            size=batch.shape[-2:],
+            mode='bilinear',
             align_corners=False
         )
         axes[i + 1].imshow(tensor_to_display(downsampled_upsampled[0]))
@@ -129,84 +188,37 @@ def visualize_downsample(vod_dir, scale_factor=0.5, modes=("area", "bilinear"),
 
 
 def visualize_reconstruction(checkpoint_path, vod_dir, output_path=None,
-                              num_frames=30, fps=30, device="cpu"):
+                             num_frames=30, fps=30, device="cpu"):
     """Load a VAE checkpoint, encode/decode contiguous frames, and create side-by-side GIF."""
     if output_path is None:
         output_path = VISUALIZE_DIR / "reconstruction.gif"
-    output_path = str(output_path)  # Convert Path to string for imageio
-    # Load checkpoint
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-
-    # Get model config from checkpoint or use defaults
-    config = ckpt.get("model_config", {})
-    model = VAE(
-        image_channels=config.get("image_channels", 3),
-        hidden_channels=config.get("hidden_channels", 16),
-        latent_channels=config.get("latent_channels", 4),
-        num_layers=config.get("num_layers", 4),
-        decoder_hidden_channels=config.get("decoder_hidden_channels"),
-        decoder_num_layers=config.get("decoder_num_layers"),
-    ).to(device)
-    model.load_state_dict(ckpt["model"])
-    model.eval()
-
-    print(f"Loaded checkpoint: {checkpoint_path}")
-    print(f"Epoch: {ckpt.get('epoch', 'unknown')}")
-
-    # Find all episode directories and pick a random one
-    episode_dirs = sorted(Path(vod_dir).glob("*/*/frames"))
-    episode_dir = random.choice(episode_dirs)
-    frame_paths = sorted(episode_dir.glob("*.png"))
-
-    # Pick a random starting point that allows num_frames contiguous frames
-    max_start = max(0, len(frame_paths) - num_frames)
-    start_idx = random.randint(0, max_start)
-    frame_paths = frame_paths[start_idx:start_idx + num_frames]
-
-    print(f"Episode: {episode_dir}")
-    print(f"Frames {start_idx} to {start_idx + len(frame_paths) - 1}")
-
-    # Load frames as batch
-    frames = []
-    for path in frame_paths:
-        img = Image.open(path).convert("RGB")
-        tensor = transforms.ToTensor()(img) * 2 - 1  # [-1, 1]
-        frames.append(tensor)
-    batch = torch.stack(frames).to(device)
-
-    # Encode and decode
+    
+    model = load_vae_model(checkpoint_path, device)
+    batch, frame_paths, episode_dir, start_idx = load_frames_from_episode(vod_dir, num_frames)
+    batch = batch.to(device)
+    
     with torch.no_grad():
         encoded = model.encoder(batch)
         z, mean, logvar = model.reparameterize(encoded, sample=False)
         recon = model.decoder(z).cpu()
-
-    # If reconstruction is different resolution, upsample for display
+    
     if recon.shape[-2:] != batch.shape[-2:]:
         recon = F.interpolate(recon, size=batch.shape[-2:], mode='bilinear', align_corners=False)
-
+    
     batch = batch.cpu()
-
-    # Compute average L1
     l1 = F.l1_loss(recon, batch).item()
     print(f"Average L1: {l1:.4f}")
-
-    # Create side-by-side frames for GIF
+    
     gif_frames = []
-    for i in range(len(frames)):
+    for i in range(len(batch)):
         orig = tensor_to_display(batch[i])
         rec = tensor_to_display(recon[i])
-
-        # Concatenate side by side
         combined = np.concatenate([orig, rec], axis=1)
-        # Convert to uint8
-        combined = (combined * 255).astype(np.uint8)
-        gif_frames.append(combined)
-
-    # Save GIF
-    imageio.mimsave(output_path, gif_frames, fps=fps)
-    print(f"Saved GIF to: {output_path}")
-
-    # Also show first frame comparison
+        gif_frames.append((combined * 255).astype(np.uint8))
+    
+    save_gif(gif_frames, output_path, fps)
+    
+    # Show first frame comparison
     fig, axes = plt.subplots(1, 2, figsize=(10, 5))
     axes[0].imshow(tensor_to_display(batch[0]))
     axes[0].set_title("Original")
@@ -217,6 +229,7 @@ def visualize_reconstruction(checkpoint_path, vod_dir, output_path=None,
     plt.tight_layout()
     plt.show()
 
+
 def visualize_detection(vod_dir, output_path=None, num_frames=60, fps=30):
     """Create a GIF showing bird bounding box detection on video frames.
     
@@ -225,69 +238,29 @@ def visualize_detection(vod_dir, output_path=None, num_frames=60, fps=30):
     """
     if output_path is None:
         output_path = VISUALIZE_DIR / "bird_detection.gif"
-    output_path = str(output_path)  # Convert Path to string for imageio
-
-    # Find all episode directories and pick a random one
-    episode_dirs = sorted(Path(vod_dir).glob("*/*/frames"))
-    episode_dir = random.choice(episode_dirs)
-    frame_paths = sorted(episode_dir.glob("*.png"))
-
-    # Pick a random starting point
-    max_start = max(0, len(frame_paths) - num_frames)
-    start_idx = random.randint(0, max_start)
-    frame_paths = frame_paths[start_idx:start_idx + num_frames]
-
-    print(f"Episode: {episode_dir}")
-    print(f"Frames {start_idx} to {start_idx + len(frame_paths) - 1}")
-
+    
+    batch, frame_paths, episode_dir, start_idx = load_frames_from_episode(vod_dir, num_frames)
     transform = transforms.ToTensor()
+    
     gif_frames = []
     detected_count = 0
-
-    # Hardcoded bird detection parameters
-    bird_x_min = 50
-    bird_x_max = 100
-    bird_height = 35
-
+    
     for path in frame_paths:
-        # Load and convert to tensor
         img_pil = Image.open(path).convert("RGB")
-        img_tensor = transform(img_pil) * 2 - 1  # [-1, 1]
-
-        # Detect bird bbox (inline detection logic)
-        img = (img_tensor + 1) / 2  # [0, 1]
-        r, g, b = img[0], img[1], img[2]
-
-        # Detect orange bird body
-        bird_mask = (r > 0.8) & (g > 0.3) & (g < 0.6) & (b < 0.3)
-
-        bbox = None
-        if bird_mask.any():
-            H, W = bird_mask.shape
-
-            # Find top edge of bird (y_min)
-            rows = bird_mask.any(dim=1).nonzero(as_tuple=True)[0]
-            y_min = rows.min().item() - 23  # Hardcoded offset
-
-            # Fixed x bounds and height
-            y_max = min(H - 1, y_min + bird_height)
-
-            bbox = (bird_x_min, y_min, bird_x_max, y_max)
-
-        # Draw bbox on image
+        img_tensor = transform(img_pil) * 2 - 1
+        
+        bbox = detect_bird_bbox(img_tensor)
+        
         draw = ImageDraw.Draw(img_pil)
         if bbox is not None:
             x_min, y_min, x_max, y_max = bbox
             draw.rectangle([x_min, y_min, x_max, y_max], outline="red", width=2)
             detected_count += 1
-
+        
         gif_frames.append(np.array(img_pil))
-
+    
     print(f"Bird detected in {detected_count}/{len(frame_paths)} frames")
-
-    # Save GIF
-    imageio.mimsave(output_path, gif_frames, fps=fps)
-    print(f"Saved: {output_path}")
+    save_gif(gif_frames, output_path, fps)
 
 
 if __name__ == "__main__":
@@ -299,10 +272,7 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    vod_dir = args.vod_dir
-    checkpoint = args.checkpoint
-    
-    if checkpoint:
-        visualize_reconstruction(checkpoint, vod_dir, num_frames=90)
-    visualize_detection(vod_dir, num_frames=90)
-    visualize_downsample(vod_dir, scale_factor=0.5, modes=("area", "bilinear"))
+    if args.checkpoint:
+        visualize_reconstruction(args.checkpoint, args.vod_dir, num_frames=90)
+    visualize_detection(args.vod_dir, num_frames=90)
+    visualize_downsample(args.vod_dir, scale_factor=0.5, modes=("area", "bilinear"))

@@ -39,13 +39,17 @@ from diffuse.nn.vae import VAE
 from diffuse.nn.resunet import ResUNet
 from diffuse.ngen.sampler import euler_sample, euler_sample_cfg
 
-# Latent normalization constants (from encode_vod.py)
-LATENT_MEAN = 0.4735
-LATENT_STD = 1.5931
+# Fallback values (for backward compatibility)
+DEFAULT_LATENT_MEAN = 0.4735
+DEFAULT_LATENT_STD = 1.5931
 
 
 def load_vae(checkpoint_path, device):
-    """Load frozen VAE from checkpoint."""
+    """Load frozen VAE from checkpoint and return latent statistics.
+    
+    Returns:
+        tuple of (vae, latent_mean, latent_std)
+    """
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     cfg = ckpt["model_config"]
     vae = VAE(
@@ -58,7 +62,17 @@ def load_vae(checkpoint_path, device):
     vae.eval()
     for p in vae.parameters():
         p.requires_grad = False
-    return vae
+    
+    # Load latent statistics from checkpoint
+    latent_mean = ckpt.get("latent_mean", DEFAULT_LATENT_MEAN)
+    latent_std = ckpt.get("latent_std", DEFAULT_LATENT_STD)
+    
+    if "latent_mean" in ckpt and "latent_std" in ckpt:
+        print(f"Loaded latent statistics from checkpoint: mean={latent_mean:.4f}, std={latent_std:.4f}")
+    else:
+        print(f"Warning: checkpoint does not contain latent statistics, using defaults")
+    
+    return vae, latent_mean, latent_std
 
 
 def load_flow_model(checkpoint_path, device):
@@ -184,7 +198,7 @@ def main():
     vae_path = args.vae_checkpoint
 
     print(f"Loading VAE from {vae_path}")
-    vae = load_vae(vae_path, device)
+    vae, latent_mean, latent_std = load_vae(vae_path, device)
 
     # Get vod directory (required)
     if not args.vod_dir:
@@ -194,8 +208,6 @@ def main():
 
     # Config values
     k = model_cfg["context_size"]
-    latent_mean = LATENT_MEAN
-    latent_std = LATENT_STD
     num_aug_bins = model_cfg["num_aug_bins"]
 
     print(f"Context frames: {k}")
