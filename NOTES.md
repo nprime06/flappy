@@ -6,7 +6,7 @@ Usage and file structure:
 - load real game from game/rl/environment.py
 - train ppo in game/rl/
 - record gameplay (with augmented policy) in vod/run to vod/
-- train VAE in diffuse/ae/
+- train VAE in diffuse/vae/
 - encode latents (update LATENT_MEAN/STD!) to latent-vod/
 - train flow and reflow in diffuse/ngen/
 
@@ -36,3 +36,9 @@ Change vod/record.py to take input flags for consistency
 
 
 Doing detailed ablation study for the optimizations we used? idk 
+
+
+Note that in CFG we zero out the conditioning latents, instead of normal (where we have a dedicated null token/class). slightly weird. idk
+
+
+important! clean up absolute paths and stuff

@@ -266,7 +266,7 @@ scheduler.step()
 
 ## 7. KL Divergence Numerical Stability (MEDIUM)
 
-**File**: `train_ae.py:188`
+**File**: `train_vae.py:188`
 ```python
 kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
 ```
@@ -466,7 +466,7 @@ For Flappy Bird, smaller may be acceptable. If quality insufficient, increase to
 
 | # | Issue | Severity | Effort | File | Status |
 |---|-------|----------|--------|------|--------|
-| 14 | Decoder fine-tuning | MEDIUM | Medium | `diffuse/ae/train_ae.py` (new phase) | ⏳ Deferred |
+| 14 | Decoder fine-tuning | MEDIUM | Medium | `diffuse/vae/train_vae.py` (new phase) | ⏳ Deferred |
 | 15 | Increase model capacity | MEDIUM | Low | `diffuse/ngen/train_ngen.py` | ⏳ Deferred |
 
 ---
@@ -492,7 +492,7 @@ These changes should be done separately before retraining:
 | `diffuse/ngen/train_ngen.py` | Add CFG dropout, gradient clipping, LR scheduler, context_frames=8, done head training | ✅ Done |
 | `diffuse/ngen/loss.py` | Add done loss term (BCE) | ✅ Done |
 | `diffuse/nn/resunet.py` | Add done head MLP for termination detection | ✅ Done |
-| `diffuse/ae/train_ae.py` | Add decoder fine-tuning phase | ⏳ Deferred |
+| `diffuse/vae/train_vae.py` | Add decoder fine-tuning phase | ⏳ Deferred |
 | `world/test_world.py` | Fix normalization, match step count, fix z_0 injection, add smoothing, add done detection, add CFG | ✅ Done |
 
 ---
@@ -713,7 +713,7 @@ Memory and performance optimizations applied:
 
 | File | Change | Impact |
 |------|--------|--------|
-| `diffuse/ae/train_ae.py` | Added bfloat16 autocast (was missing, ngen already had it) | ~2x memory, ~30% speedup |
+| `diffuse/vae/train_vae.py` | Added bfloat16 autocast (was missing, ngen already had it) | ~2x memory, ~30% speedup |
 | `diffuse/nn/resunet.py` | Added gradient checkpointing to forward pass | ~25% compute cost for ~50% memory reduction |
 | `diffuse/nn/resblock.py` | Replaced ConvTranspose2d with interpolate+conv in UpResBlock | Lower memory, avoids checkerboard artifacts |
 
@@ -727,7 +727,7 @@ Additional performance optimizations:
 
 | File | Change | Impact |
 |------|--------|--------|
-| `diffuse/ae/train_ae.py` | Added `prefetch_factor=2`, `drop_last=True`, `non_blocking=True`, `torch.compile(mode="reduce-overhead")` | Better GPU utilization, static shapes for compile |
+| `diffuse/vae/train_vae.py` | Added `prefetch_factor=2`, `drop_last=True`, `non_blocking=True`, `torch.compile(mode="reduce-overhead")` | Better GPU utilization, static shapes for compile |
 | `diffuse/ngen/train_ngen.py` | Same DataLoader + memory format + compile optimizations | Same benefits |
 | `diffuse/ngen/sampler.py` | Changed `@torch.no_grad()` to `@torch.inference_mode()` | Slightly faster inference |
 | `latent-vod/encode_vod.py` | Changed `torch.no_grad()` to `torch.inference_mode()` | Slightly faster encoding |
@@ -745,8 +745,64 @@ Removed all `memory_format=torch.channels_last` optimizations from the codebase:
 
 - **Files modified**:
   - `diffuse/ngen/train_ngen.py`: Removed from model `.to(device)` and tensor transfers (3 occurrences)
-  - `diffuse/ae/train_ae.py`: Removed from model `.to(device)` and batch transfers (2 occurrences)
+  - `diffuse/vae/train_vae.py`: Removed from model `.to(device)` and batch transfers (2 occurrences)
 
 - **Impact**: Minimal performance difference expected. The default NCHW memory format works fine for this use case.
+
+---
+
+# Automatic Latent Statistics Computation (1/27)
+
+Automated the process of computing and saving latent mean/std statistics after VAE training:
+
+- **What changed**:
+  - `diffuse/vae/train_vae.py`: Added `compute_latent_statistics()` function that samples 500 random frames and computes latent mean/std. Automatically called after training completes and saves results to `config.json` in the run directory.
+  - `latent-vod/encode_vod.py`: Added `load_latent_statistics()` function that automatically loads statistics from the run directory's `config.json` based on checkpoint path. Falls back to default values if config not found (backward compatible).
+
+- **Benefits**:
+  - No more manual running of `compute_latent_std.py` and copying values
+  - Statistics automatically stored alongside training config for easy tracking
+  - Encoding script automatically uses correct statistics for each VAE checkpoint
+
+- **Files modified**:
+  - `diffuse/vae/train_vae.py`: Added statistics computation function and post-training hook
+  - `latent-vod/encode_vod.py`: Added statistics loading and updated encode functions to use loaded values
+
+---
+
+# Automatic Distribution Weight Computation (1/27)
+
+Automated the computation of `action_weight` and `done_pos_weight` from actual dataset statistics:
+
+- **What changed**:
+  - `latent-vod/encode_vod.py`: Added `compute_dataset_statistics()` function that samples ~100 runs per category directory, counts action=0/1 and done=0/1 occurrences, and computes weights as inverse ratios. Called at end of encoding and saves results to `encode_config.json`.
+  - `diffuse/ngen/train_ngen.py`: Added `load_weights_from_encode_config()` function that reads `action_weight` and `done_pos_weight` from `encode_config.json` when `--latent-vod` is provided, overriding the hardcoded defaults.
+
+- **Benefits**:
+  - No more manual computation and hardcoding of distribution weights
+  - Weights automatically adapt if dataset composition changes
+  - Statistics stored in `encode_config.json` for transparency and reproducibility
+
+- **Expected `encode_config.json` output**:
+  ```json
+  {
+    "vae_checkpoint": "/path/to/vae.pt",
+    "latent_mean": 0.4755,
+    "latent_std": 1.5959,
+    "action_weight": 17.22,
+    "done_pos_weight": 159.10,
+    "statistics": {
+      "total_steps": 160104,
+      "action_0_count": 151316,
+      "action_1_count": 8788,
+      "done_0_count": 159104,
+      "done_1_count": 1000
+    }
+  }
+  ```
+
+- **Files modified**:
+  - `latent-vod/encode_vod.py`: Added `compute_dataset_statistics()` and post-encoding hook
+  - `diffuse/ngen/train_ngen.py`: Added `load_weights_from_encode_config()` and auto-loading logic
 
 ---

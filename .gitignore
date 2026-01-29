@@ -149,7 +149,8 @@ cython_debug/
 .DS_Store
 
 
-
+.cursor/
+.claude/
 flappyenv/
 frames/
 *.mp4

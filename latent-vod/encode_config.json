@@ -1,5 +1,5 @@
 {
-  "vae_checkpoint": "/home/willzhao/flappy/diffuse/ae/runs/vae_20260125_125114/checkpoints/latest.pt",
+  "vae_checkpoint": "/home/willzhao/flappy/diffuse/vae/runs/vae_20260125_125114/checkpoints/latest.pt",
   "latent_mean": 0.4755,
   "latent_std": 1.5959,
   "batch_size": 64,

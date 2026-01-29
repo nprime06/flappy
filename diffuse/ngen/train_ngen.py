@@ -131,7 +131,12 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
         if is_main:
             print(f"Loading reflow model from {reflow_checkpoint}")
         reflow_model = load_flow_model(reflow_checkpoint, device)
-        reflow_generator = ReflowPairGenerator(reflow_model, num_steps=train_config["reflow_steps"])
+        reflow_generator = ReflowPairGenerator(
+            reflow_model, 
+            num_steps=train_config["reflow_steps"],
+            cfg_scale=1.5,  # Use CFG during reflow backward integration
+            num_classes=model_config["num_classes"]
+        )
         if is_main:
             print("Reflow mode enabled: using pre-trained model to generate (z_0, z_1) pairs")
 
@@ -301,6 +306,10 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
             if cfg_dropout_prob > 0:
                 cfg_mask = torch.rand(B, device=device) < cfg_dropout_prob
                 z_cond = torch.where(cfg_mask.view(B, 1, 1, 1), torch.zeros_like(z_cond), z_cond)
+                # Set actions to null token (num_classes = 2) when CFG dropout is active
+                actions = torch.where(cfg_mask.view(B, 1), 
+                                     torch.full_like(actions, model_config["num_classes"]), 
+                                     actions)
 
             if reflow_generator is not None:
                 z_0 = reflow_generator.generate(z_target, z_cond, actions, aug_level)

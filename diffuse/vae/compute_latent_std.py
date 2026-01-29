@@ -10,11 +10,11 @@ from PIL import Image
 from torchvision import transforms
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from nn.ae import VAE
+from nn.vae import VAE
 
 
 def main():
-    checkpoint = "/Users/william/Desktop/Random/flappy/diffuse/ae/runs/vae_20260125_125114/checkpoints/latest.pt"
+    checkpoint = "/Users/william/Desktop/Random/flappy/diffuse/vae/runs/vae_20260125_125114/checkpoints/latest.pt"
     vod_dir = "/Users/william/Desktop/Random/flappy/vod"
     num_samples = 500
     device = "cuda" if torch.cuda.is_available() else "cpu"

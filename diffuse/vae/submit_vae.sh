@@ -2,8 +2,8 @@
 # Wrapper script to submit VAE training job with proper GPU allocation
 #
 # USAGE:
-#   ./submit_ae.sh                           # New run
-#   ./submit_ae.sh --run-dir /path/to/run    # Resume existing run (use full absolute path)
+#   ./submit_vae.sh                           # New run
+#   ./submit_vae.sh --run-dir /path/to/run    # Resume existing run (use full absolute path)
 
 set -euo pipefail
 
@@ -30,7 +30,7 @@ NUM_CPUS=16
 TOTAL_MEM=128
 
 # Create run directory if not resuming (so logs go there)
-RUNS_DIR="/home/willzhao/flappy/diffuse/ae/runs"
+RUNS_DIR="/home/willzhao/flappy/diffuse/vae/runs"
 if [[ -z "$RUN_DIR" ]]; then
     TIMESTAMP=$(date +%Y%m%d_%H%M%S)
     RUN_DIR="${RUNS_DIR}/vae_${TIMESTAMP}"
@@ -58,6 +58,6 @@ sbatch \
     --output="${RUN_DIR}/slurm-%j.log" \
     --error="${RUN_DIR}/slurm-%j.err" \
     --export=ALL,TRAIN_ARGS="$TRAIN_ARGS" \
-    /home/willzhao/flappy/diffuse/ae/train_ae.sh
+    /home/willzhao/flappy/diffuse/vae/train_vae.sh
 
 echo "Job submitted. Logs will be in: $RUN_DIR"

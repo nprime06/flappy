@@ -35,7 +35,7 @@ def _add_gameover_overlay(img: np.ndarray) -> np.ndarray:
     y = int(frame_pil.height * 0.4)
     frame_pil.paste(gameover, (x, y), gameover)
     return np.array(frame_pil.convert("RGB"))
-from diffuse.nn.ae import VAE
+from diffuse.nn.vae import VAE
 from diffuse.nn.resunet import ResUNet
 from diffuse.ngen.sampler import euler_sample, euler_sample_cfg
 
@@ -293,7 +293,8 @@ def main():
             if args.use_cfg:
                 z_next = euler_sample_cfg(
                     flow_model, z_0, z_cond, actions, aug_level,
-                    cfg_scale=args.cfg_scale, num_steps=args.num_steps
+                    cfg_scale=args.cfg_scale, num_steps=args.num_steps,
+                    num_classes=model_cfg["num_classes"]
                 )
             else:
                 z_next = euler_sample(

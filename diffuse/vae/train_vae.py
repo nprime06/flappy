@@ -20,8 +20,8 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from nn.ae import VAE
-from ae.ae_data import FramesDataset
+from nn.vae import VAE
+from vae.vae_data import FramesDataset
 
 model_config = {
     "image_channels": 3,
@@ -43,9 +43,9 @@ train_config = {
     "num_workers": 4,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
     # "data_dir": "/Users/william/Desktop/Random/flappy/vod",
-    # "runs_dir": "/Users/william/Desktop/Random/flappy/diffuse/ae/runs",
+    # "runs_dir": "/Users/william/Desktop/Random/flappy/diffuse/vae/runs",
     "data_dir": "/home/willzhao/flappy/vod",
-    "runs_dir": "/home/willzhao/flappy/diffuse/ae/runs",
+    "runs_dir": "/home/willzhao/flappy/diffuse/vae/runs",
 }
 
 

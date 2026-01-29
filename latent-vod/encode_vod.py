@@ -13,7 +13,7 @@ from torchvision import transforms
 from tqdm import tqdm
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from diffuse.nn.ae import VAE
+from diffuse.nn.vae import VAE
 
 # Fallback values (for backward compatibility)
 DEFAULT_LATENT_MEAN = 0.4735

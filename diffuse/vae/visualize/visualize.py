@@ -1,8 +1,7 @@
-"""Visualization utilities for autoencoder development."""
-
 import os
 import sys
 import random
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -13,12 +12,13 @@ from PIL import Image, ImageDraw
 from torchvision import transforms
 import imageio
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from nn.ae import VAE
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from nn.vae import VAE
 
+# Get the directory of this file for default output paths
+VISUALIZE_DIR = Path(__file__).parent
 
 def load_random_frame(vod_dir):
-    """Load a random frame from the dataset as a tensor in [-1, 1]."""
     frame_paths = sorted(Path(vod_dir).glob("*/*/frames/*.png"))
     path = random.choice(frame_paths)
     img = Image.open(path).convert("RGB")
@@ -34,39 +34,106 @@ def tensor_to_display(tensor):
     return img.permute(1, 2, 0).numpy()
 
 
-def visualize_downsample(vod_dir, scale_factor=0.5, modes=("area", "bilinear")):
-    """Compare original frame with downsampled versions using different modes."""
-    tensor, path = load_random_frame(vod_dir)
-    print(f"Loaded: {path}")
-    print(f"Original shape: {tensor.shape}")
+def visualize_downsample(vod_dir, scale_factor=0.5, modes=("area", "bilinear"), 
+                          output_path=None, num_frames=30, fps=30):
+    """Compare original frames with downsampled versions using different modes and create a GIF."""
+    if output_path is None:
+        output_path = VISUALIZE_DIR / "downsample.gif"
+    output_path = str(output_path)  # Convert Path to string for imageio
 
-    # Add batch dim for interpolate
-    tensor_batch = tensor.unsqueeze(0)
+    # Find all episode directories and pick a random one
+    episode_dirs = sorted(Path(vod_dir).glob("*/*/frames"))
+    episode_dir = random.choice(episode_dirs)
+    frame_paths = sorted(episode_dir.glob("*.png"))
 
+    # Pick a random starting point that allows num_frames contiguous frames
+    max_start = max(0, len(frame_paths) - num_frames)
+    start_idx = random.randint(0, max_start)
+    frame_paths = frame_paths[start_idx:start_idx + num_frames]
+
+    print(f"Episode: {episode_dir}")
+    print(f"Frames {start_idx} to {start_idx + len(frame_paths) - 1}")
+
+    # Load frames as batch
+    frames = []
+    for path in frame_paths:
+        img = Image.open(path).convert("RGB")
+        tensor = transforms.ToTensor()(img) * 2 - 1  # [-1, 1]
+        frames.append(tensor)
+    batch = torch.stack(frames)
+
+    print(f"Original shape: {batch.shape}")
+
+    # Create GIF frames showing original and downsampled versions side by side
+    gif_frames = []
+    n_modes = len(modes)
+    
+    for i in range(len(frames)):
+        frame_tensor = batch[i]
+        frame_batch = frame_tensor.unsqueeze(0)
+        
+        # Get original frame for display
+        orig_display = tensor_to_display(frame_tensor)
+        
+        # Create downsampled versions
+        downsampled_displays = []
+        for mode in modes:
+            downsampled = F.interpolate(frame_batch, scale_factor=scale_factor, mode=mode)
+            downsampled = downsampled.squeeze(0)
+            # Upsample back to original size for side-by-side comparison
+            downsampled_upsampled = F.interpolate(
+                downsampled.unsqueeze(0), 
+                size=frame_tensor.shape[-2:], 
+                mode='bilinear', 
+                align_corners=False
+            ).squeeze(0)
+            downsampled_displays.append(tensor_to_display(downsampled_upsampled))
+            if i == 0:  # Print shape info only for first frame
+                print(f"{mode} shape: {downsampled.shape}")
+        
+        # Concatenate original and all downsampled versions horizontally
+        combined = np.concatenate([orig_display] + downsampled_displays, axis=1)
+        # Convert to uint8
+        combined = (combined * 255).astype(np.uint8)
+        gif_frames.append(combined)
+
+    # Save GIF
+    imageio.mimsave(output_path, gif_frames, fps=fps)
+    print(f"Saved GIF to: {output_path}")
+
+    # Also show first frame comparison
     n_cols = 1 + len(modes)
     fig, axes = plt.subplots(1, n_cols, figsize=(5 * n_cols, 5))
-
+    
     # Original
-    axes[0].imshow(tensor_to_display(tensor))
-    axes[0].set_title(f"Original\n{tensor.shape[1]}x{tensor.shape[2]}")
+    axes[0].imshow(tensor_to_display(batch[0]))
+    axes[0].set_title(f"Original\n{batch.shape[2]}x{batch.shape[3]}")
     axes[0].axis("off")
-
-    # Downsampled versions
+    
+    # Downsampled versions (upsampled for display)
+    frame_batch = batch[0:1]
     for i, mode in enumerate(modes):
-        downsampled = F.interpolate(tensor_batch, scale_factor=scale_factor, mode=mode)
-        downsampled = downsampled.squeeze(0)
-        axes[i + 1].imshow(tensor_to_display(downsampled))
-        axes[i + 1].set_title(f"{mode}\n{downsampled.shape[1]}x{downsampled.shape[2]}")
+        downsampled = F.interpolate(frame_batch, scale_factor=scale_factor, mode=mode)
+        downsampled_upsampled = F.interpolate(
+            downsampled, 
+            size=batch.shape[-2:], 
+            mode='bilinear', 
+            align_corners=False
+        )
+        axes[i + 1].imshow(tensor_to_display(downsampled_upsampled[0]))
+        axes[i + 1].set_title(f"{mode}\n{downsampled.shape[2]}x{downsampled.shape[3]}")
         axes[i + 1].axis("off")
-        print(f"{mode} shape: {downsampled.shape}")
-
+    
     plt.tight_layout()
     plt.show()
 
 
-def visualize_reconstruction(checkpoint_path, vod_dir, output_path="reconstruction.gif",
+def visualize_reconstruction(checkpoint_path, vod_dir, output_path=None,
                               num_frames=30, fps=30, device="cpu"):
     """Load a VAE checkpoint, encode/decode contiguous frames, and create side-by-side GIF."""
+    if output_path is None:
+        output_path = VISUALIZE_DIR / "reconstruction.gif"
+    output_path = str(output_path)  # Convert Path to string for imageio
     # Load checkpoint
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
@@ -150,12 +217,15 @@ def visualize_reconstruction(checkpoint_path, vod_dir, output_path="reconstructi
     plt.tight_layout()
     plt.show()
 
-def visualize_detection(vod_dir, output_path="bird_detection.gif", num_frames=60, fps=30):
+def visualize_detection(vod_dir, output_path=None, num_frames=60, fps=30):
     """Create a GIF showing bird bounding box detection on video frames.
     
     The bird has a fixed x position (world scrolls past it), so we only
     detect the top edge (y_min) and use fixed x bounds and height.
     """
+    if output_path is None:
+        output_path = VISUALIZE_DIR / "bird_detection.gif"
+    output_path = str(output_path)  # Convert Path to string for imageio
 
     # Find all episode directories and pick a random one
     episode_dirs = sorted(Path(vod_dir).glob("*/*/frames"))
@@ -221,7 +291,18 @@ def visualize_detection(vod_dir, output_path="bird_detection.gif", num_frames=60
 
 
 if __name__ == "__main__":
-    vod_dir = "/Users/william/Desktop/Random/flappy/vod"
-    checkpoint = "/Users/william/Desktop/Random/flappy/diffuse/ae/runs/vae_20260125_125114/checkpoints/latest.pt"
-    visualize_reconstruction(checkpoint, vod_dir, output_path="reconstruction.gif", num_frames=90)
-    # visualize_detection(vod_dir, output_path="bird_detection.gif", num_frames=120)
+    parser = argparse.ArgumentParser(description="Visualize VAE reconstructions and other visualizations")
+    parser.add_argument("--vod_dir", type=str, required=True,
+                        help="Path to the VOD directory containing frame data")
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Path to the VAE checkpoint (required for visualize_reconstruction)")
+    
+    args = parser.parse_args()
+    
+    vod_dir = args.vod_dir
+    checkpoint = args.checkpoint
+    
+    if checkpoint:
+        visualize_reconstruction(checkpoint, vod_dir, num_frames=90)
+    visualize_detection(vod_dir, num_frames=90)
+    visualize_downsample(vod_dir, scale_factor=0.5, modes=("area", "bilinear"))
