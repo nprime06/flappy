@@ -31,7 +31,13 @@ def load_vae(checkpoint_path, device):
         latent_channels=cfg["latent_channels"],
         num_layers=cfg["num_layers"],
     ).to(device)
-    vae.load_state_dict(ckpt["model"])
+    state_dict = ckpt["model"]
+    
+    # handle compiled model checkpoints (_orig_mod prefix)
+    if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+        state_dict = {key.replace("_orig_mod.", ""): value for key, value in state_dict.items()}
+    
+    vae.load_state_dict(state_dict)
     vae.eval()
     for p in vae.parameters():
         p.requires_grad = False
