@@ -23,6 +23,9 @@ class LatentTraceDataset(Dataset):
             latents_file = run_dir / "latents.pt"
             info_file = run_dir / "run_info.jsonl"
 
+            if not latents_file.exists() or not info_file.exists():
+                continue
+
             actions = {}
             terminated_flags = {}
             with open(info_file) as f:

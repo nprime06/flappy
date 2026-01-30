@@ -1,5 +1,3 @@
-"""Flow matching training for world model (next frame prediction)."""
-
 import argparse
 import json
 import os
