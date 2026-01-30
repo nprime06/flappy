@@ -27,7 +27,7 @@ from ngen.sampler import ReflowPairGenerator
 
 model_config = {
     "in_channels": 4,           # latent_channels from VAE
-    "hidden_channels": 128,
+    "hidden_channels": 64,
     "num_layers": 2,            # limited by odd bottleneck width (9)
     "embed_dim": 128,
     "act_embed_dim": 16,
