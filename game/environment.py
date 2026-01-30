@@ -44,7 +44,6 @@ DEATH_FRAMES = 5
 _gameover_sprite = None
 
 def _load_gameover_sprite():
-    """Load and cache the game over sprite from flappy_bird_gymnasium assets."""
     global _gameover_sprite
     if _gameover_sprite is None:
         import flappy_bird_gymnasium
@@ -54,20 +53,19 @@ def _load_gameover_sprite():
     return _gameover_sprite
 
 def _add_gameover_overlay(frame_np: np.ndarray) -> np.ndarray:
-    """Add the game over sprite overlay to a frame."""
     gameover = _load_gameover_sprite()
 
-    # Convert frame to PIL Image
+    # convert frame to PIL Image
     frame_pil = Image.fromarray(frame_np).convert("RGBA")
 
-    # Calculate position (centered horizontally, upper-middle vertically)
+    # calculate position (centered horizontally, upper-middle vertically)
     x = (frame_pil.width - gameover.width) // 2
     y = int(frame_pil.height * 0.4)
 
-    # Composite the game over sprite onto the frame
+    # composite the game over sprite onto the frame
     frame_pil.paste(gameover, (x, y), gameover)  # Use gameover as mask for transparency
 
-    # Convert back to RGB numpy array
+    # convert back to RGB numpy array
     return np.array(frame_pil.convert("RGB"))
 
 
@@ -132,8 +130,8 @@ def _process_obs(obs: Any) -> Any:
     bird_vel_y = obs[10]
     gap_middle_y = (nearest_gap_top_y + nearest_gap_bottom_y) / 2
 
-    dy = (gap_middle_y - bird_y - 0.01) / 0.11
-    dx = (nearest_pipe_x - 0.1) / 0.3
+    dy = (gap_middle_y - bird_y - 0.01) / 0.11 # hardcoded normalization to [-1, 1]
+    dx = (nearest_pipe_x - 0.1) / 0.3 # hardcoded normalization to [-1, 1]
     return np.array([dy, bird_vel_y, dx])
 
 
@@ -145,7 +143,6 @@ def _agent_action(agent: AgentLike, processed_obs: Any) -> int:
 
 
 def _to_jsonable(x: Any) -> Any:
-    """Convert common RL objects (numpy scalars/arrays, dicts) into JSON-serializable forms."""
     if x is None or isinstance(x, (str, int, float, bool)):
         return x
     if isinstance(x, (np.integer,)):
@@ -158,7 +155,6 @@ def _to_jsonable(x: Any) -> Any:
         return {str(k): _to_jsonable(v) for k, v in x.items()}
     if isinstance(x, (list, tuple)):
         return [_to_jsonable(v) for v in x]
-    # Fallback: at least preserve something printable
     return str(x)
 
 
@@ -166,19 +162,9 @@ def run_episode(
     agent: AgentLike,
     cfg: RunConfig = RunConfig(),
 ) -> RunResult:
-    """
-    Run a single episode.
-
-    What gets saved (when cfg.out_dir != None):
-      - metrics.json (episode summary + config)
-      - run_info.jsonl (per-step JSON lines, including `obs`, best-effort `state`, and `info`) (if cfg.save_run_info)
-      - frames/000000.png ... (if cfg.save_frames)
-      - video.mp4 (if cfg.save_video)
-    """
-
-    # Decide render_mode:
-    # - For frames/video we need rgb_array.
-    # - For pure agent training/eval (no visuals), None is fastest.
+    # decide render_mode:
+    # - for frames/video we need rgb_array.
+    # - for pure agent training/eval (no visuals), None is fastest.
     render_mode: Optional[str] = "rgb_array" if (cfg.save_frames or cfg.save_video) else None
 
     # Create output structure
@@ -309,19 +295,19 @@ def run_episode(
                     if video_writer is not None:
                         video_writer.append_data(frame_np)
 
-                # Log death frame with terminated=True
+                # log death frame with terminated=True
                 if run_info_f is not None:
                     run_info_f.write(
                         json.dumps(
                             {
                                 "step": step_idx,
                                 "t_wall_s": float(time.time() - t0),
-                                "action": 0,  # No action during death frames
+                                "action": 0,  # no action during death frames
                                 "reward": 0.0,
                                 "terminated": True,
                                 "truncated": False,
                                 "score": int(last_score) if last_score is not None else None,
-                                "processed_obs": None,  # No meaningful obs
+                                "processed_obs": None,  # no meaningful obs
                                 "info": {"death_frame": death_frame_idx + 1},
                             },
                         )

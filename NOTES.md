@@ -79,7 +79,7 @@ DATA COLLECTION:
 50 runs for each 16 combinations p_stim=0.0, 0.005, 0.01, 0.015 and p_freeze=0.0, 0.1, 0.2, 0.3
 4710.70s of data = 1.3hr = 141321 frames
 
-VAE: vae_20260129_171402
+VAE: vae_20260129_224946 (done training!)
 {
     "image_channels": 3,
     "hidden_channels": 16,

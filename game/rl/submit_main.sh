@@ -1,57 +1,75 @@
 #!/bin/bash
-#SBATCH -p mit_normal_gpu
-#SBATCH --job-name=flappy-bot
-#SBATCH -N 1
-#SBATCH -n 1
-#SBATCH -c 8
-#SBATCH --mem=64G
-#SBATCH --gres=gpu:h200:1
-#SBATCH -t 06:00:00
-#SBATCH --output="/home/willzhao/flappy/game/rl/%x-%j.log"
-#SBATCH --error="/home/willzhao/flappy/game/rl/%x-%j.err"
+# wrapper to submit RL training job
+#
+# USAGE:
+#   ./submit_main.sh train_ppo.py
+#   ./submit_main.sh train_ppo.py --run-dir /path/to/run  # resume run (use full absolute path)
 
 set -euo pipefail
 
-cd /home/willzhao/flappy
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FILE=""
+RUN_DIR=""
+NUM_CPUS=8
+TOTAL_MEM=64
+TIME="06:00:00"
 
-module load miniforge
-eval "$(conda shell.bash hook)"
-conda activate /home/willzhao/flappy/.conda/py31114
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --run-dir)
+            RUN_DIR="$2"
+            shift 2
+            ;;
+        *)
+            if [[ -z "$FILE" ]]; then
+                FILE="$1"
+            else
+                echo "Unknown option: $1"
+                echo "Usage: $0 FILE [--run-dir DIR]"
+                exit 1
+            fi
+            shift
+            ;;
+    esac
+done
 
-export PYTHONUNBUFFERED=1
-export PYTHONPATH="/home/willzhao/flappy/game:${PYTHONPATH:-}"
-
-FILE="${FILE:-}"
+# Validate required arguments
 if [[ -z "$FILE" ]]; then
-  echo "ERROR: FILE is required; FILE=train_ppo.py sbatch submit_main.sh" >&2
-  exit 1
+    echo "Error: FILE is required"
+    echo "Usage: $0 FILE [--run-dir DIR]"
+    exit 1
 fi
 
-RUN_PATH="/home/willzhao/flappy/game/rl/${FILE}"
+RUN_PATH="${SCRIPT_DIR}/${FILE}"
 if [[ ! -f "$RUN_PATH" ]]; then
-  echo "ERROR: FILE '$FILE' not found at '$RUN_PATH'" >&2
-  exit 1
+    echo "Error: FILE '$FILE' not found at '$RUN_PATH'" >&2
+    exit 1
 fi
 
-# Optional: pass --run-dir to resume from existing run
-RUN_DIR="${RUN_DIR:-}"
-if [[ -n "$RUN_DIR" ]]; then
-  python "$RUN_PATH" --run-dir "$RUN_DIR" | tee /tmp/train_output_$$.txt
-else
-  python "$RUN_PATH" | tee /tmp/train_output_$$.txt
+# Create run directory if not resuming
+RUNS_DIR="${SCRIPT_DIR}/runs"
+if [[ -z "$RUN_DIR" ]]; then
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    RUN_DIR="${RUNS_DIR}/$(basename "$FILE" .py)_${TIMESTAMP}"
 fi
+mkdir -p "$RUN_DIR"
 
-# Extract run directory from output and move SLURM logs there
-DETECTED_RUN_DIR=$(grep "^Run directory:" /tmp/train_output_$$.txt | head -1 | cut -d' ' -f3)
-rm -f /tmp/train_output_$$.txt
+# Build train script arguments
+TRAIN_ARGS="--run-dir $RUN_DIR"
 
-if [[ -n "$DETECTED_RUN_DIR" && -d "$DETECTED_RUN_DIR" ]]; then
-  SLURM_LOG="/home/willzhao/flappy/game/rl/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.log"
-  SLURM_ERR="/home/willzhao/flappy/game/rl/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.err"
+sbatch \
+    --job-name=flappy-bot \
+    --partition=mit_normal_gpu \
+    --nodes=1 \
+    --ntasks=1 \
+    --cpus-per-task=$NUM_CPUS \
+    --mem=${TOTAL_MEM}G \
+    --gres=gpu:h200:1 \
+    --time=$TIME \
+    --output="${RUN_DIR}/slurm-%j.log" \
+    --error="${RUN_DIR}/slurm-%j.err" \
+    --export=ALL,FILE="$FILE",TRAIN_ARGS="$TRAIN_ARGS" \
+    "${SCRIPT_DIR}/train_main.sh"
 
-  # Copy logs to run directory (can't move since SLURM still writing)
-  cp "$SLURM_LOG" "$DETECTED_RUN_DIR/slurm.log" 2>/dev/null || true
-  cp "$SLURM_ERR" "$DETECTED_RUN_DIR/slurm.err" 2>/dev/null || true
-
-  echo "Copied SLURM logs to $DETECTED_RUN_DIR"
-fi
+echo "logs in $RUN_DIR"
