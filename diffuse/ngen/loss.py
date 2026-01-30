@@ -13,8 +13,8 @@ def flow_matching_loss(model, z_target, z_cond, actions, aug_level, z_0=None,
     if z_0 is None:
         z_0 = torch.randn_like(z_target)
 
-    t = torch.rand(B, device=device).view(B, 1, 1, 1)
-    z_t = (1 - t) * z_0 + t * z_target
+    t = torch.rand(B, device=device)
+    z_t = (1 - t.view(B, 1, 1, 1)) * z_0 + t.view(B, 1, 1, 1) * z_target
     v_target = z_target - z_0
     v_pred, done_logit = model(z_t, t, z_cond=z_cond, c=actions, aug_level=aug_level)
     mse_per_sample = ((v_pred - v_target) ** 2).mean(dim=[1, 2, 3])  # (B,)
