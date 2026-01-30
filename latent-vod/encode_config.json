@@ -1,7 +1,35 @@
 {
-  "vae_checkpoint": "/home/willzhao/flappy/diffuse/vae/runs/vae_20260125_125114/checkpoints/latest.pt",
-  "latent_mean": 0.4755,
-  "latent_std": 1.5959,
-  "batch_size": 64,
-  "encoded_at": "2026-01-26T11:37:06.538782"
+  "vae_checkpoint": "/home/willzhao/flappy/diffuse/vae/runs/vae_20260129_224946/checkpoints/latest.pt",
+  "latent_mean": 0.33806607127189636,
+  "latent_std": 1.5238630771636963,
+  "batch_size": 256,
+  "encoded_at": "2026-01-30T13:32:28.843875",
+  "action_weight": 17.74,
+  "done_pos_weight": 28.44,
+  "statistics": {
+    "total_steps": 141321,
+    "action_0_count": 133780,
+    "action_1_count": 7541,
+    "done_0_count": 136521,
+    "done_1_count": 4800,
+    "sample_size": 128,
+    "categories_sampled": [
+      "p_stim_0.01_p_freeze_0.1",
+      "p_stim_0.01_p_freeze_0.0",
+      "p_stim_0.005_p_freeze_0.2",
+      "p_stim_0.005_p_freeze_0.3",
+      "p_stim_0.015_p_freeze_0.1",
+      "p_stim_0.015_p_freeze_0.0",
+      "p_stim_0.0_p_freeze_0.0",
+      "p_stim_0.0_p_freeze_0.1",
+      "p_stim_0.01_p_freeze_0.2",
+      "p_stim_0.01_p_freeze_0.3",
+      "p_stim_0.005_p_freeze_0.1",
+      "p_stim_0.005_p_freeze_0.0",
+      "p_stim_0.015_p_freeze_0.2",
+      "p_stim_0.015_p_freeze_0.3",
+      "p_stim_0.0_p_freeze_0.3",
+      "p_stim_0.0_p_freeze_0.2"
+    ]
+  }
 }
