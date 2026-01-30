@@ -153,7 +153,11 @@ def train(run_dir=None):
     if os.path.exists(latest_ckpt_path):
         print(f"resuming from {latest_ckpt_path}")
         ckpt = torch.load(latest_ckpt_path, map_location=model_config["device"], weights_only=False)
-        model.load_state_dict(ckpt["model"])
+        state_dict = ckpt["model"]
+        
+        if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+            state_dict = {key.replace("_orig_mod.", ""): value for key, value in state_dict.items()}
+        model.load_state_dict(state_dict) # handle compiled model checkpoints (_orig_mod prefix)
         optimizer.load_state_dict(ckpt["optimizer"])
         scheduler.load_state_dict(ckpt["scheduler"])
         start_epoch = ckpt["epoch"]
@@ -256,8 +260,11 @@ def train(run_dir=None):
             )
             print(f"saving checkpoint {epoch+1:05d}: latent mean: {stats['latent_mean']:.4f}, latent std: {stats['latent_std']:.4f}")
             
+            # unwrap compiled model before saving to avoid _orig_mod prefix
+            model_for_save = model._orig_mod if hasattr(model, '_orig_mod') else model
+            
             ckpt = {
-                "model": model.state_dict(),
+                "model": model_for_save.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),  # save scheduler state
                 "epoch": epoch + 1,

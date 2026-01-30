@@ -52,10 +52,10 @@ game/
 vod/record DONE!
 
 diffuse/
-- just check for correctness and stuff in ngen
-- ngen/sampler is horrible
+- just check for correctness and stuff in ngen DONE!
+- ngen/sampler is horrible DONE!
 - vae is messy DONE!
-- fix vae/visualize/visualize.py
+- fix vae/visualize/visualize.py DONE!
 
 latent-vod/ is messy DONE!
 

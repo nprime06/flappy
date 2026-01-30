@@ -1,9 +1,4 @@
-"""Dataset for pre-computed VAE latents.
-
-This module provides LatentTraceDataset which has the same interface as
-TraceDataset but loads pre-computed latents instead of raw images.
-"""
-
+import argparse
 import json
 from pathlib import Path
 
@@ -12,36 +7,29 @@ from torch.utils.data import Dataset, DataLoader
 
 
 class LatentTraceDataset(Dataset):
-    """
-    past_latents: (k, 4, H', W')
-    current_latent: (4, H', W')
-    all_actions: (k+1,) of actions a_{n-k}, ..., a_{n}; note a_n -> frame_n
-    done: 0, 1
-    """
+    # past_latents: (k, 4, H', W')
+    # current_latent: (4, H', W')
+    # all_actions: (k+1,) of actions a_{n-k}, ..., a_{n}; note a_n -> frame_n
+    # done: 0, 1
 
     def __init__(self, latent_vod_dir, k=4):
         self.k = k
 
         self.samples = []
-        action_0_samples = []
-        action_1_samples = []
         self.episode_actions = {}
         self._latent_cache = {}
 
         for run_dir in Path(latent_vod_dir).glob("*/*/"):
             latents_file = run_dir / "latents.pt"
             info_file = run_dir / "run_info.jsonl"
-            if not latents_file.exists() or not info_file.exists():
-                continue
 
             actions = {}
-            terminated_flags = {}  # Track which frames have terminated=True
+            terminated_flags = {}
             with open(info_file) as f:
                 for line in f:
                     rec = json.loads(line)
                     if "step" in rec:
                         actions[rec["step"]] = rec["action"]
-                        # Use terminated flag from run_info if available
                         terminated_flags[rec["step"]] = rec.get("terminated", False)
 
             run_key = str(run_dir)
@@ -54,21 +42,15 @@ class LatentTraceDataset(Dataset):
 
             for step in range(k, n_frames):
                 if step in actions:
-                    # Use terminated flag from run_info, fallback to last frame
-                    done = terminated_flags.get(step, step == n_frames - 1)
-                    sample = (run_key, step, actions[step], done)
+                    done = terminated_flags[step]
+                    sample = (run_key, step, done)
                     self.samples.append(sample)
-
-                    if actions[step] == 0:
-                        action_0_samples.append(sample)
-                    else:
-                        action_1_samples.append(sample)
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        run_key, step, _action, done = self.samples[idx]  # _action unused, we build all k+1 from dict
+        run_key, step, done = self.samples[idx]
 
         latents = self._latent_cache[run_key]
         current_latent = latents[step]  # (4, H', W')
@@ -84,15 +66,20 @@ class LatentTraceDataset(Dataset):
 
 
 if __name__ == "__main__":
-    dataset = LatentTraceDataset("/Users/william/Desktop/Random/flappy/latent-vod")
-    print(f"Dataset size: {len(dataset)}")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--latent-vod", type=str, required=True)
+    parser.add_argument("--k", type=int, default=4)
+    args = parser.parse_args()
+
+    dataset = LatentTraceDataset(args.latent_vod, k=args.k)
+    print(f"dataset size: {len(dataset)}")
 
     if len(dataset) > 0:
         loader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=0)
         past_latents, current_latent, actions, done = next(iter(loader))
-        print(f"Past latents shape: {past_latents.shape}")
-        print(f"Current latent shape: {current_latent.shape}")
-        print(f"Actions shape: {actions.shape}")  # Should be (B, k+1) = (32, 5) for k=4
-        print(f"Done shape: {done.shape}")
-        print(f"Past latents range: [{past_latents.min():.2f}, {past_latents.max():.2f}]")
-        print(f"Current latent range: [{current_latent.min():.2f}, {current_latent.max():.2f}]")
+        print(f"past latents shape: {past_latents.shape}")
+        print(f"current latent shape: {current_latent.shape}")
+        print(f"actions shape: {actions.shape}")
+        print(f"done shape: {done.shape}")
+        print(f"past latents range: [{past_latents.min():.2f}, {past_latents.max():.2f}]")
+        print(f"current latent range: [{current_latent.min():.2f}, {current_latent.max():.2f}]")

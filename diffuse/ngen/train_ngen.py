@@ -85,7 +85,7 @@ def setup_ddp():
         return 0, 0, 1, torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
+def train(latent_vod=None, run_dir=None, reflow_checkpoint=None):
     rank, local_rank, world_size, device = setup_ddp()
     is_main = rank == 0
 
@@ -325,11 +325,8 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--run-dir", type=str, default=None,
-                        help="Run directory to resume from (creates new if not specified)")
-    parser.add_argument("--reflow", type=str, default=None,
-                        help="Path to pre-trained model checkpoint for reflow training")
-    parser.add_argument("--latent-vod", type=str, default=None,
-                        help="Path to pre-computed latent VOD directory (skips VAE encoding)")
+    parser.add_argument("--latent-vod", type=str, default=None) 
+    parser.add_argument("--run-dir", type=str, default=None) # resume from run directory
+    parser.add_argument("--reflow", type=str, default=None) # pre-trained checkpoint for reflow 
     args = parser.parse_args()
-    train(run_dir=args.run_dir, reflow_checkpoint=args.reflow, latent_vod=args.latent_vod)
+    train(latent_vod=args.latent_vod, run_dir=args.run_dir, reflow_checkpoint=args.reflow)

@@ -15,10 +15,9 @@ import imageio
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from nn.vae import VAE
 
-# Constants
 VISUALIZE_DIR = Path(__file__).parent
 
-# Bird detection parameters
+# bird detection parameters
 BIRD_X_MIN = 50
 BIRD_X_MAX = 100
 BIRD_HEIGHT = 35
@@ -30,51 +29,40 @@ BIRD_COLOR_RANGE = {
     "b_max": 0.3,
 }
 
-
-# Helper functions
 def tensor_to_display(tensor):
-    """Convert tensor from [-1, 1] to numpy array for display [0, 1]."""
     img = (tensor + 1) / 2
     img = img.clamp(0, 1)
     return img.permute(1, 2, 0).numpy()
 
 
-def load_frames_from_episode(vod_dir, num_frames):
-    """Load the last num_frames frames from a random episode directory.
-    
-    Returns:
-        tuple: (batch tensor, frame_paths, episode_dir, start_idx)
-    """
+def load_frames_from_episode(vod_dir, num_frames): # Load the last num_frames frames from a random episode directory
     episode_dirs = sorted(Path(vod_dir).glob("*/*/frames"))
     episode_dir = random.choice(episode_dirs)
     frame_paths = sorted(episode_dir.glob("*.png"))
     
-    # Always pick the last num_frames frames
     start_idx = max(0, len(frame_paths) - num_frames)
     frame_paths = frame_paths[start_idx:]
     
-    print(f"Episode: {episode_dir}")
-    print(f"Frames {start_idx} to {start_idx + len(frame_paths) - 1}")
+    print(f"episode: {episode_dir}")
+    print(f"frames {start_idx} to {start_idx + len(frame_paths) - 1}")
     
     frames = []
     for path in frame_paths:
         img = Image.open(path).convert("RGB")
-        tensor = transforms.ToTensor()(img) * 2 - 1  # [-1, 1]
+        tensor = transforms.ToTensor()(img) * 2 - 1
         frames.append(tensor)
     
     batch = torch.stack(frames)
     return batch, frame_paths, episode_dir, start_idx
 
 
-def save_gif(frames, output_path, fps=30):
-    """Save a list of numpy arrays as a GIF."""
+def save_gif(frames, output_path, fps=30): 
     output_path = str(output_path)
     imageio.mimsave(output_path, frames, fps=fps)
-    print(f"Saved GIF to: {output_path}")
+    print(f"saved gif to: {output_path}")
 
 
 def load_vae_model(checkpoint_path, device="cpu"):
-    """Load VAE model from checkpoint."""
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     config = ckpt.get("model_config", {})
     
@@ -87,25 +75,22 @@ def load_vae_model(checkpoint_path, device="cpu"):
         decoder_num_layers=config.get("decoder_num_layers"),
     ).to(device)
     
-    model.load_state_dict(ckpt["model"])
+    state_dict = ckpt["model"]
+    # handle checkpoints saved from compiled models (with _orig_mod prefix)
+    if any(key.startswith("_orig_mod.") for key in state_dict.keys()): # strip _orig_mod. prefix from all keys
+        state_dict = {key.replace("_orig_mod.", ""): value for key, value in state_dict.items()}
+    
+    model.load_state_dict(state_dict)
     model.eval()
     
-    print(f"Loaded checkpoint: {checkpoint_path}")
-    print(f"Epoch: {ckpt.get('epoch', 'unknown')}")
+    print(f"loaded checkpoint: {checkpoint_path}")
+    print(f"epoch: {ckpt.get('epoch', 'unknown')}")
     
     return model
 
 
 def detect_bird_bbox(img_tensor):
-    """Detect bird bounding box from image tensor.
-    
-    Args:
-        img_tensor: Tensor in [-1, 1] format
-        
-    Returns:
-        tuple or None: (x_min, y_min, x_max, y_max) or None if not detected
-    """
-    img = (img_tensor + 1) / 2  # [0, 1]
+    img = (img_tensor + 1) / 2
     r, g, b = img[0], img[1], img[2]
     
     bird_mask = (
@@ -126,15 +111,13 @@ def detect_bird_bbox(img_tensor):
     return (BIRD_X_MIN, y_min, BIRD_X_MAX, y_max)
 
 
-# Visualization functions
 def visualize_downsample(vod_dir, scale_factor=0.5, modes=("area", "bilinear"),
                          output_path=None, num_frames=30, fps=30):
-    """Compare original frames with downsampled versions using different modes and create a GIF."""
     if output_path is None:
         output_path = VISUALIZE_DIR / "downsample.gif"
     
     batch, frame_paths, episode_dir, start_idx = load_frames_from_episode(vod_dir, num_frames)
-    print(f"Original shape: {batch.shape}")
+    print(f"original shape: {batch.shape}")
     
     gif_frames = []
     for i in range(len(batch)):
@@ -162,7 +145,7 @@ def visualize_downsample(vod_dir, scale_factor=0.5, modes=("area", "bilinear"),
     
     save_gif(gif_frames, output_path, fps)
     
-    # Show first frame comparison
+    # show first frame comparison
     n_cols = 1 + len(modes)
     fig, axes = plt.subplots(1, n_cols, figsize=(5 * n_cols, 5))
     
@@ -189,7 +172,6 @@ def visualize_downsample(vod_dir, scale_factor=0.5, modes=("area", "bilinear"),
 
 def visualize_reconstruction(checkpoint_path, vod_dir, output_path=None,
                              num_frames=30, fps=30, device="cpu"):
-    """Load a VAE checkpoint, encode/decode contiguous frames, and create side-by-side GIF."""
     if output_path is None:
         output_path = VISUALIZE_DIR / "reconstruction.gif"
     
@@ -218,7 +200,7 @@ def visualize_reconstruction(checkpoint_path, vod_dir, output_path=None,
     
     save_gif(gif_frames, output_path, fps)
     
-    # Show first frame comparison
+    # show first frame comparison
     fig, axes = plt.subplots(1, 2, figsize=(10, 5))
     axes[0].imshow(tensor_to_display(batch[0]))
     axes[0].set_title("Original")
@@ -231,11 +213,6 @@ def visualize_reconstruction(checkpoint_path, vod_dir, output_path=None,
 
 
 def visualize_detection(vod_dir, output_path=None, num_frames=60, fps=30):
-    """Create a GIF showing bird bounding box detection on video frames.
-    
-    The bird has a fixed x position (world scrolls past it), so we only
-    detect the top edge (y_min) and use fixed x bounds and height.
-    """
     if output_path is None:
         output_path = VISUALIZE_DIR / "bird_detection.gif"
     
@@ -264,11 +241,9 @@ def visualize_detection(vod_dir, output_path=None, num_frames=60, fps=30):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Visualize VAE reconstructions and other visualizations")
-    parser.add_argument("--vod_dir", type=str, required=True,
-                        help="Path to the VOD directory containing frame data")
-    parser.add_argument("--checkpoint", type=str, default=None,
-                        help="Path to the VAE checkpoint (required for visualize_reconstruction)")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--vod_dir", type=str, required=True)
+    parser.add_argument("--checkpoint", type=str, default=None)
     
     args = parser.parse_args()
     
