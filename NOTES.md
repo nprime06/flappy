@@ -65,7 +65,30 @@ world/
 
 FINAL round of things to clean: 
 - important! clean up absolute paths and stuff
+    -     "data_dir": "/home/willzhao/flappy/vod",
+    "runs_dir": "/home/willzhao/flappy/diffuse/vae/runs", in VAE training config. need to add tags to submit_vae. 
+    -     "runs_dir": "/home/willzhao/flappy/diffuse/ngen/runs",
+ in ngen
 - combine notes, explain, todo, readme -> readme
 
 
-as of 1/29, we have 4710.70s of data = 1.3hr = 141321 frames
+
+TRAINING NOTES FOR 1/29 RUN: 
+
+DATA COLLECTION: 
+50 runs for each 16 combinations p_stim=0.0, 0.005, 0.01, 0.015 and p_freeze=0.0, 0.1, 0.2, 0.3
+4710.70s of data = 1.3hr = 141321 frames
+
+VAE: vae_20260129_171402
+{
+    "image_channels": 3,
+    "hidden_channels": 16,
+    "latent_channels": 4,
+    "num_layers": 3,
+    "num_epochs": 200,
+    "batch_size": 256,
+}
+Batches per epoch: 552
+Decoder has 93,243 parameters
+Encoder has 167,118 parameters
+~10.5 hr training time, 49211MiB / 143771MiB on 1 H200

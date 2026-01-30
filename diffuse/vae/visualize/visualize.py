@@ -40,7 +40,7 @@ def tensor_to_display(tensor):
 
 
 def load_frames_from_episode(vod_dir, num_frames):
-    """Load contiguous frames from a random episode directory.
+    """Load the last num_frames frames from a random episode directory.
     
     Returns:
         tuple: (batch tensor, frame_paths, episode_dir, start_idx)
@@ -49,9 +49,9 @@ def load_frames_from_episode(vod_dir, num_frames):
     episode_dir = random.choice(episode_dirs)
     frame_paths = sorted(episode_dir.glob("*.png"))
     
-    max_start = max(0, len(frame_paths) - num_frames)
-    start_idx = random.randint(0, max_start)
-    frame_paths = frame_paths[start_idx:start_idx + num_frames]
+    # Always pick the last num_frames frames
+    start_idx = max(0, len(frame_paths) - num_frames)
+    frame_paths = frame_paths[start_idx:]
     
     print(f"Episode: {episode_dir}")
     print(f"Frames {start_idx} to {start_idx + len(frame_paths) - 1}")

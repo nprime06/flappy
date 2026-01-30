@@ -7,6 +7,7 @@ import sys
 import time
 from datetime import datetime
 from typing import Any
+from pathlib import Path
 from tqdm import tqdm
 
 import torch
@@ -23,43 +24,15 @@ from ngen.ngen_data import LatentTraceDataset
 from ngen.loss import flow_matching_loss
 from ngen.sampler import ReflowPairGenerator
 
-# work directly with normalized latents
-
-def setup_ddp():
-    """Initialize DDP. Returns (rank, local_rank, world_size, device)."""
-    if "RANK" in os.environ:
-        # Launched via torchrun
-        rank = int(os.environ["RANK"])
-        local_rank = int(os.environ["LOCAL_RANK"])
-        world_size = int(os.environ["WORLD_SIZE"])
-        dist.init_process_group(backend="nccl")
-        device = torch.device(f"cuda:{local_rank}")
-        torch.cuda.set_device(device)
-        return rank, local_rank, world_size, device
-    else:
-        # Single GPU fallback (direct python invocation)
-        return 0, 0, 1, torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
-def cleanup_ddp():
-    """Clean up DDP."""
-    if dist.is_initialized():
-        dist.destroy_process_group()
-
-
-def is_main_process(rank):
-    """Check if this is the main process (rank 0)."""
-    return rank == 0
-
 
 model_config = {
     "in_channels": 4,           # latent_channels from VAE
     "hidden_channels": 128,
-    "num_layers": 2,            # limited by odd latent width (18)
+    "num_layers": 2,            # limited by odd bottleneck width (9)
     "embed_dim": 128,
     "act_embed_dim": 16,
     "num_classes": 2,           # flappy bird: 0=no-flap, 1=flap
-    "context_size": 8,               # k frames and actions
+    "context_size": 8,          # k past latents + k+1 actions
     "num_aug_bins": 16,
 }
 
@@ -73,36 +46,13 @@ train_config = {
 
     "reflow_steps": 50,
     "cfg_dropout_prob": 0.1,
-    "done_loss_weight": 0.1, # Weight for done head BCE loss
-    "done_pos_weight": 30.0, # BCE pos_weight for done=1 (~avg episode length)
-    "action_weight": 17.0, # extra weight for action=1 to fix class imbalance
+    "done_loss_weight": 0.1,    # weight for done head BCE loss
     "runs_dir": "/home/willzhao/flappy/diffuse/ngen/runs",
     "device": "cuda" if torch.cuda.is_available() else "cpu",
 }
 
-def load_weights_from_encode_config(latent_vod_dir):
-    """Load action_weight and done_pos_weight from encode_config.json if available.
 
-    Args:
-        latent_vod_dir: Path to latent-vod directory
-
-    Returns:
-        dict with action_weight and done_pos_weight (may be None if not found)
-    """
-    from pathlib import Path
-    config_path = Path(latent_vod_dir) / "encode_config.json"
-    if config_path.exists():
-        with open(config_path, "r") as f:
-            config = json.load(f)
-        return {
-            "action_weight": config.get("action_weight"),
-            "done_pos_weight": config.get("done_pos_weight"),
-        }
-    return {}
-
-
-def load_flow_model(checkpoint_path, device):
-    """Load a pre-trained flow model (for reflow)."""
+def load_flow_model(checkpoint_path, device): # load reflow model (no ddp, inference only)
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     cfg = ckpt["model_config"]
     model = ResUNet(
@@ -121,15 +71,28 @@ def load_flow_model(checkpoint_path, device):
         p.requires_grad = False
     return model
 
+
+def setup_ddp():
+    if "RANK" in os.environ: # launched via torchrun
+        rank = int(os.environ["RANK"])
+        local_rank = int(os.environ["LOCAL_RANK"])
+        world_size = int(os.environ["WORLD_SIZE"])
+        dist.init_process_group(backend="nccl")
+        device = torch.device(f"cuda:{local_rank}")
+        torch.cuda.set_device(device)
+        return rank, local_rank, world_size, device
+    else: # single gpu fallback (direct python invocation)
+        return 0, 0, 1, torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
 def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
     rank, local_rank, world_size, device = setup_ddp()
-    is_main = is_main_process(rank)
+    is_main = rank == 0
 
-    # load reflow model (no ddp, inference only)
     reflow_generator = None
     if reflow_checkpoint is not None:
         if is_main:
-            print(f"Loading reflow model from {reflow_checkpoint}")
+            print(f"loading reflow model: {reflow_checkpoint}")
         reflow_model = load_flow_model(reflow_checkpoint, device)
         reflow_generator = ReflowPairGenerator(
             reflow_model, 
@@ -138,7 +101,7 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
             num_classes=model_config["num_classes"]
         )
         if is_main:
-            print("Reflow mode enabled: using pre-trained model to generate (z_0, z_1) pairs")
+            print("reflow mode enabled: using pre-trained model to generate (z_0, z_1) pairs")
 
     model = ResUNet(
         in_channels=model_config["in_channels"],
@@ -153,12 +116,10 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
 
     if is_main:
         num_params = sum(p.numel() for p in model.parameters())
-        print(f"Flow model has {num_params:,} parameters")
+        print(f"flow model: {num_params:,} parameters")
 
-    # Compile model for faster training (before DDP wrapping)
     model = torch.compile(model, mode="reduce-overhead", dynamic=False)
 
-    # Wrap in DDP if multi-GPU
     if world_size > 1:
         model = DDP(
             model,
@@ -167,13 +128,11 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
             gradient_as_bucket_view=True, # reduces memory and improves comm efficiency
         )
 
-    # Access raw model for state_dict (unwrap DDP if needed)
     raw_model = model.module if world_size > 1 else model
 
     optimizer = AdamW(raw_model.parameters(), lr=train_config["lr"])
     scheduler = CosineAnnealingLR(optimizer, T_max=train_config["num_epochs"], eta_min=1e-6)
 
-    # Setup run directory (rank 0 only creates directories)
     if is_main:
         if run_dir is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -183,8 +142,7 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
         checkpoint_dir = os.path.join(run_dir, "checkpoints")
         os.makedirs(checkpoint_dir, exist_ok=True)
 
-    # Broadcast run_dir to all ranks (needed for checkpoint paths)
-    if world_size > 1:
+    if world_size > 1: # broadcast to all ranks for checkpoint paths
         run_dir_list = [run_dir] if is_main else [None]
         dist.broadcast_object_list(run_dir_list, src=0)
         run_dir = run_dir_list[0]
@@ -200,27 +158,23 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
             if reflow_checkpoint is None:
                 reflow_checkpoint = saved_config.get("reflow_checkpoint")
                 if reflow_checkpoint and is_main:
-                    print(f"Loaded reflow_checkpoint from config: {reflow_checkpoint}")
+                    print(f"loaded reflow_checkpoint from config: {reflow_checkpoint}")
             if latent_vod is None:
                 latent_vod = saved_config.get("latent_vod")
                 if latent_vod and is_main:
-                    print(f"Loaded latent_vod from config: {latent_vod}")
+                    print(f"loaded latent_vod from config: {latent_vod}")
 
-    # Load weights from encode_config.json if available
-    if latent_vod:
-        encode_weights = load_weights_from_encode_config(latent_vod)
-        if encode_weights.get("action_weight") is not None:
-            train_config["action_weight"] = encode_weights["action_weight"]
-            if is_main:
-                print(f"Using action_weight={encode_weights['action_weight']} from encode_config.json")
-        if encode_weights.get("done_pos_weight") is not None:
-            train_config["done_pos_weight"] = encode_weights["done_pos_weight"]
-            if is_main:
-                print(f"Using done_pos_weight={encode_weights['done_pos_weight']} from encode_config.json")
+    config_path = Path(latent_vod) / "encode_config.json"
+    with open(config_path, "r") as f:
+        config = json.load(f)
+    train_config["action_weight"] = config.get("action_weight")
+    train_config["done_pos_weight"] = config.get("done_pos_weight")
+    if is_main:
+        print(f"loaded action_weight={config.get('action_weight')} from encode_config.json")
+        print(f"loaded done_pos_weight={config.get('done_pos_weight')} from encode_config.json")
 
     if is_main:
-        print(f"Run directory: {run_dir}")
-        # Save config
+        print(f"run directory: {run_dir}")
         if not os.path.exists(config_path):
             config = {
                 "model_config": model_config,
@@ -231,26 +185,22 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
             with open(config_path, "w") as f:
                 json.dump(config, f, indent=2)
 
-    # Try to resume from checkpoint (all ranks load, but print on main only)
     start_epoch = 0
     total_wall_time = 0.0
 
     if os.path.exists(latest_ckpt_path):
-        if is_main:
-            print(f"Resuming from {latest_ckpt_path}")
         ckpt = torch.load(latest_ckpt_path, map_location=device, weights_only=False)
-        raw_model.load_state_dict(ckpt["model"])  # Load to raw model, not DDP wrapper
+        raw_model.load_state_dict(ckpt["model"])  # load to raw model, not ddp wrapper
         optimizer.load_state_dict(ckpt["optimizer"])
         scheduler.load_state_dict(ckpt["scheduler"])
         start_epoch = ckpt["epoch"]
         total_wall_time = ckpt.get("wall_time_s", 0.0)
         
         if is_main:
-            print(f"Resumed at epoch {start_epoch}")
+            print(f"resuming from {latest_ckpt_path} at epoch {start_epoch}")
         if world_size > 1:
             dist.barrier() # sync after checkpoint loading
 
-    # Setup data with DistributedSampler for multi-GPU
     dataset = LatentTraceDataset(latent_vod, k=model_config["context_size"])
 
     sampler = DistributedSampler[Any](dataset, num_replicas=world_size, rank=rank, shuffle=True)
@@ -262,22 +212,15 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
         pin_memory=True,
         persistent_workers=True,
         prefetch_factor=2,
-        drop_last=True,  # Required for torch.compile with static shapes
+        drop_last=True,  # required for torch.compile with static shapes
     )
 
     if is_main:
-        print(f"Dataset size: {len(dataset)} samples")
-        print(f"Batches per epoch: {len(dataloader)}")
+        print(f"dataset size: {len(dataset)} samples")
+        print(f"batches per epoch: {len(dataloader)}")
 
     log_file = open(log_path, "a", buffering=1) if is_main else None
     train_start_t = time.perf_counter()
-
-    max_aug_std = train_config["max_aug_std"]
-    num_aug_bins = model_config["num_aug_bins"]
-    cfg_dropout_prob = train_config["cfg_dropout_prob"]
-    done_loss_weight = train_config["done_loss_weight"]
-    done_pos_weight = train_config["done_pos_weight"]
-    action_weight = train_config["action_weight"]
 
     model.train()
     epoch_iterator = tqdm(range(start_epoch, train_config["num_epochs"])) if is_main else range(start_epoch, train_config["num_epochs"])
@@ -285,6 +228,7 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
         sampler.set_epoch(epoch) 
 
         epoch_loss = 0.0
+        epoch_flow_loss = 0.0
         epoch_done_loss = 0.0
 
         for batch in dataloader:
@@ -299,17 +243,14 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
             z_target = current_frame
             z_cond = past_frames.flatten(1, 2)
 
-            aug_level = torch.randint(0, num_aug_bins, (B,), device=device)
-            aug_std = aug_level.float() / num_aug_bins * max_aug_std
+            aug_level = torch.randint(0, model_config["num_aug_bins"], (B,), device=device)
+            aug_std = aug_level.float() / model_config["num_aug_bins"] * train_config["max_aug_std"]
             z_cond = z_cond + torch.randn_like(z_cond) * aug_std.view(B, 1, 1, 1)
 
-            if cfg_dropout_prob > 0:
-                cfg_mask = torch.rand(B, device=device) < cfg_dropout_prob
-                z_cond = torch.where(cfg_mask.view(B, 1, 1, 1), torch.zeros_like(z_cond), z_cond)
-                # Set actions to null token (num_classes = 2) when CFG dropout is active
-                actions = torch.where(cfg_mask.view(B, 1), 
-                                     torch.full_like(actions, model_config["num_classes"]), 
-                                     actions)
+            if train_config["cfg_dropout_prob"] > 0:
+                cfg_mask = torch.rand(B, device=device) < train_config["cfg_dropout_prob"]
+                z_cond = torch.where(cfg_mask.view(B, 1, 1, 1), torch.zeros_like(z_cond), z_cond) # null conditioning
+                actions = torch.where(cfg_mask.view(B, 1), torch.full_like(actions, model_config["num_classes"]), actions) # null token (num_classes = 2)
 
             if reflow_generator is not None:
                 z_0 = reflow_generator.generate(z_target, z_cond, actions, aug_level)
@@ -317,10 +258,10 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
                 z_0 = None  # sample from N(0,1) in loss function
 
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                loss, done_loss = flow_matching_loss(
+                loss, flow_loss, done_loss = flow_matching_loss(
                     model, z_target, z_cond, actions, aug_level, z_0=z_0,
-                    done_labels=done_labels, done_loss_weight=done_loss_weight,
-                    action_weight=action_weight, done_pos_weight=done_pos_weight
+                    done_labels=done_labels, done_loss_weight=train_config["done_loss_weight"],
+                    action_weight=train_config["action_weight"], done_pos_weight=train_config["done_pos_weight"]
                 )
 
             optimizer.zero_grad()
@@ -329,12 +270,13 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
             optimizer.step()
 
             epoch_loss += loss.item()
+            epoch_flow_loss += flow_loss.item()
             epoch_done_loss += done_loss.item()
-
         scheduler.step()
 
         n_batches = len(dataloader)
         avg_loss = epoch_loss / n_batches
+        avg_flow_loss = epoch_flow_loss / n_batches
         avg_done_loss = epoch_done_loss / n_batches
         wall_time_s = total_wall_time + (time.perf_counter() - train_start_t)
         current_lr = scheduler.get_last_lr()[0]
@@ -343,24 +285,28 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
             log_entry = {
                 "epoch": epoch + 1,
                 "loss": avg_loss,
+                "flow_loss": avg_flow_loss,
                 "done_loss": avg_done_loss,
                 "lr": current_lr,
                 "wall_time_s": wall_time_s,
             }
             log_file.write(json.dumps(log_entry) + "\n")
 
-            print(f"epoch {epoch+1:4d}/{train_config['num_epochs']} loss: {avg_loss:.6f}")
+            print(f"epoch {epoch+1:4d}/{train_config['num_epochs']} | "
+                  f"loss: {avg_loss:.4f} | "
+                  f"flow: {avg_flow_loss:.4f} | "
+                  f"done: {avg_done_loss:.4f}")
 
-        # Checkpoint saving (main process only, with barrier for sync)
+        # checkpoint saving (main process only, with barrier for sync)
         if (epoch + 1) % train_config["checkpoint_interval"] == 0:
             if world_size > 1:
                 dist.barrier()
 
             if is_main:
                 ckpt = {
-                    "model": raw_model.state_dict(),  # save raw model, not DDP wrapper
+                    "model": raw_model.state_dict(),  # save raw model, not ddp wrapper
                     "optimizer": optimizer.state_dict(),
-                    "scheduler": scheduler.state_dict(),  # save scheduler state
+                    "scheduler": scheduler.state_dict(),  # save scheduler
                     "epoch": epoch + 1,
                     "wall_time_s": wall_time_s,
                     "model_config": model_config,
@@ -371,9 +317,10 @@ def train(run_dir=None, reflow_checkpoint=None, latent_vod=None):
 
     if is_main:
         log_file.close()
-        print(f"\nTraining complete. Run directory: {run_dir}")
+        print(f"\ntraining complete! run directory: {run_dir}")
 
-    cleanup_ddp()
+    if dist.is_initialized():
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

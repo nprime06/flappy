@@ -5,8 +5,8 @@ import torch.nn.functional as F
 
 
 def flow_matching_loss(model, z_target, z_cond, actions, aug_level, z_0=None,
-                       done_labels=None, done_loss_weight=0.1, action_weight=1.0,
-                       done_pos_weight=1.0):
+                       done_labels=None, done_loss_weight=0.1, 
+                       action_weight=1.0, null_action_weight=1.0, done_pos_weight=1.0):
     """
     z_target: (B, C, H, W)
     z_cond: (B, k*C, H, W)
@@ -43,4 +43,4 @@ def flow_matching_loss(model, z_target, z_cond, actions, aug_level, z_0=None,
     )
     total_loss = flow_loss + done_loss_weight * done_loss
 
-    return total_loss, done_loss
+    return total_loss, flow_loss, done_loss
