@@ -806,3 +806,173 @@ Automated the computation of `action_weight` and `done_pos_weight` from actual d
   - `diffuse/ngen/train_ngen.py`: Added `load_weights_from_encode_config()` and auto-loading logic
 
 ---
+
+# 📋 2026-01-30: World Model Quality Improvement Plan
+
+## Current Symptoms
+- Images are sharp (VAE is fine)
+- Bird **ignores gravity** — floats in place rather than falling when no flap
+- Bird **occasionally disappears** entirely
+
+## Root Cause Analysis
+
+### Primary cause: CFG dropout zeros out actions (train_ngen.py:248-251)
+
+The current CFG dropout replaces **both** `z_cond` (frame conditioning) AND `actions` with null values. GameNGen explicitly only drops frame conditioning, never actions (Section 3.2 of the paper).
+
+**Why this breaks things:**
+- The unconditional prediction `v_uncond` has NO action information
+- At inference, CFG formula: `v = v_uncond + 1.5 * (v_cond - v_uncond)`
+- This conflates "unconditional on frames" with "unconditional on actions"
+- The model's action-following signal gets diluted by CFG amplification
+- When `v_uncond` predicts "no bird" (because it has zero context), CFG combination can erase the bird
+
+### Secondary causes
+- **Model too small** — 3M params, 2 layers (limited by odd latent width 36 → 9 after 2 downsamples)
+- **Short context** — 8 frames (0.27s) vs GameNGen's 64 frames (3.2s)
+- **Dataset size** — 141K frames vs GameNGen's 70M
+- **Noise augmentation** — max_std=0.5 vs GameNGen's 0.7
+
+## Plan: Three Phases
+
+### Phase 1: Fix CFG Dropout (HIGHEST PRIORITY — isolate primary cause)
+
+**Rationale**: 2-line code fix that isolates the most likely root cause. Retrain with everything else unchanged.
+
+**File: `diffuse/ngen/train_ngen.py` lines 248-251**
+```python
+# CURRENT (broken):
+cfg_mask = torch.rand(B, device=device) < train_config["cfg_dropout_prob"]
+z_cond = torch.where(cfg_mask.view(B, 1, 1, 1), torch.zeros_like(z_cond), z_cond)
+actions = torch.where(cfg_mask.view(B, 1), torch.full_like(actions, model_config["num_classes"]), actions)
+
+# FIX: Remove the action nullification line. Only zero out z_cond:
+cfg_mask = torch.rand(B, device=device) < train_config["cfg_dropout_prob"]
+z_cond = torch.where(cfg_mask.view(B, 1, 1, 1), torch.zeros_like(z_cond), z_cond)
+# DO NOT null out actions — CFG should only drop frame conditioning
+```
+
+**File: `diffuse/ngen/sampler.py` — euler_sample and euler_sample_backward**
+```python
+# CURRENT (broken):
+actions_null = torch.full_like(actions, num_classes)
+v_uncond, _ = model(z, t, z_cond=z_cond_null, c=actions_null, aug_level=aug_level)
+
+# FIX: Pass real actions to unconditional path:
+v_uncond, _ = model(z, t, z_cond=z_cond_null, c=actions, aug_level=aug_level)
+```
+
+**Verification**: Retrain → run `test_world.py --debug`. Bird should follow gravity and not disappear.
+
+---
+
+### Phase 2: Increase Model Capacity (if Phase 1 alone isn't sufficient)
+
+**2a. Pad latents to fix odd-dimension bottleneck**
+
+File: `diffuse/nn/resunet.py`
+- Reflect-pad latent width from 36 → 40 at start of `forward()`
+- Crop output back to 36 after `out_conv`
+- This enables 3 downsample layers: 64×40 → 32×20 → 16×10 (all even)
+
+**2b. Scale up model**
+
+File: `diffuse/ngen/train_ngen.py`
+- `num_layers`: 2 → 3
+- `hidden_channels`: 64 → 128
+- Estimated ~25-30M params (still fine for H200)
+
+**2c. Add self-attention at bottleneck**
+
+File: `diffuse/nn/resunet.py`
+- Add `nn.MultiheadAttention` after `self.bot`
+- At 16×10 spatial (160 tokens), self-attention is cheap
+- Enables global reasoning about bird position relative to pipes
+
+---
+
+### Phase 3: Training Improvements (apply together with Phase 2)
+
+**3a. Increase noise augmentation** (train_ngen.py)
+- `max_aug_std`: 0.5 → 0.7
+- `num_aug_bins`: 16 → 10 (match GameNGen)
+
+**3b. Increase context window** (train_ngen.py)
+- `context_size`: 8 → 16 (doubles temporal context to 0.53s)
+
+**3c. Collect more training data** (vod/record.py)
+- Record 5-10× more VOD episodes (target ~700K-1M+ frames)
+- Add higher `p_stim` values (0.02, 0.03) for more flap-heavy episodes
+- Re-encode all latents
+
+---
+
+## Execution Order
+
+1. **Phase 1 only** → retrain → test. Isolates whether CFG is the primary cause.
+2. If Phase 1 alone isn't enough: **Phase 1 + 2 + 3** → retrain → test.
+
+## Files to Modify
+
+| File | Phase | Change |
+|------|-------|--------|
+| `diffuse/ngen/train_ngen.py` | 1 | Remove action nullification from CFG dropout |
+| `diffuse/ngen/sampler.py` | 1 | Pass real actions in unconditional CFG path |
+| `diffuse/nn/resunet.py` | 2 | Latent padding, 3 layers, self-attention |
+| `diffuse/ngen/train_ngen.py` | 2+3 | Model config + aug + context changes |
+| `vod/record.py` | 3 | More episodes, higher p_stim values |
+
+## Key Reference: GameNGen vs Current Implementation
+
+| Aspect | GameNGen | Current | Proposed |
+|--------|----------|---------|----------|
+| CFG drops actions? | **No** (frames only) | Yes (both) | **No** (Phase 1) |
+| Model params | ~860M | 3M | ~25-30M (Phase 2) |
+| Downsample layers | Many | 2 | 3 (Phase 2) |
+| Self-attention | Yes | No | Yes at bottleneck (Phase 2) |
+| Noise aug max | 0.7 | 0.5 | 0.7 (Phase 3) |
+| Context frames | 64 | 8 | 16 (Phase 3) |
+| Training data | 70M | 141K | ~700K-1M (Phase 3) |
+
+---
+
+# Death Frames / Terminated Flag Mismatch (1/31)
+
+## Current Behavior
+
+| Frame | `terminated` | Overlay | Visual content |
+|-------|-------------|---------|----------------|
+| Collision frame | `True` | No | Normal game (bird hitting pipe) |
+| Death frames 1-5 | `True` | Yes | Game-over overlay |
+| **Total** | **6 with True** | **5 with overlay** | |
+
+- `DEATH_FRAMES = 5` in `game/environment.py`
+- The collision frame is labeled `terminated=True` but looks like normal gameplay (no overlay)
+- The 5 death frames are labeled `terminated=True` and have the gameover overlay sprite
+
+## Problems
+
+1. **Mixed visual signal for done head**: The collision frame looks like normal gameplay but is labeled terminated. The 5 overlay frames look visually distinct. The done head gets confused about what "terminated" looks like.
+
+2. **Wasted generation capacity**: Once the done head fires during inference (`test_world.py`), generation stops immediately. The model never needs to *generate* overlay frames. Every death-frame sample teaches the generation head something it'll never use.
+
+3. **Context pollution**: With k=8, a sample at death frame 5 has context that's ~62% death frames (5/8). With k=16 it's ~31%. These are distributions the model never encounters during inference since it stops at the first `done=True`.
+
+4. **Class weight distortion**: `done_pos_weight` is computed as `alive_count / dead_count`. Having 6 terminated frames per episode instead of 1-2 makes the imbalance look less severe, which under-weights the done signal during training.
+
+## Recommendation
+
+Reduce death frames to 1-2 total:
+
+- **1 terminated frame** (the collision frame, no overlay) is the cleanest signal — "this is what it looks like when the game ends."
+- If keeping overlay frames at all, 1-2 is sufficient without polluting context windows or wasting generation capacity.
+- Keep `terminated=True` consistent with visual content — either all overlay frames are terminated, or the collision frame without overlay is the only terminated one. The current split (1 without overlay + 5 with) is the worst of both worlds for the done head.
+
+## Action Items
+
+- [ ] Reduce `DEATH_FRAMES` from 5 to 1-2 in `game/environment.py`
+- [ ] Decide: overlay on terminated frames, or no overlay at all (cleanest for model)
+- [ ] Re-collect data after change
+- [ ] Recompute `done_pos_weight` (will increase since fewer done=1 frames)
+
+---

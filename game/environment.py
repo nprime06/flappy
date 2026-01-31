@@ -37,8 +37,11 @@ import imageio
 # Registers "FlappyBird-v0", "FlappyBird-rgb-v0", etc. with gymnasium.
 import flappy_bird_gymnasium  # noqa: F401
 
-# Number of extra frames to record after death (with game over overlay)
-DEATH_FRAMES = 5
+# Number of extra frames to record after death (with game over overlay).
+# NOTE: We keep `terminated=True` only for the true crash frame (the environment terminal step).
+# These post-terminal overlay frames are logged with `terminated=False` so the done head
+# learns "when death happens" instead of "overlay is present".
+DEATH_FRAMES = 1
 
 # Cache for the game over sprite
 _gameover_sprite = None
@@ -280,7 +283,7 @@ def run_episode(
                 truncated = True
                 break
 
-        # Record extra death frames with game over overlay
+        # Record extra post-terminal frames with game over overlay
         if terminated and render_mode == "rgb_array" and (frames_dir is not None or video_writer is not None):
             for death_frame_idx in range(DEATH_FRAMES):
                 frame = env.render()
@@ -295,7 +298,7 @@ def run_episode(
                     if video_writer is not None:
                         video_writer.append_data(frame_np)
 
-                # log death frame with terminated=True
+                # Log post-terminal overlay frame (do NOT mark terminated=True).
                 if run_info_f is not None:
                     run_info_f.write(
                         json.dumps(
@@ -304,11 +307,12 @@ def run_episode(
                                 "t_wall_s": float(time.time() - t0),
                                 "action": 0,  # no action during death frames
                                 "reward": 0.0,
-                                "terminated": True,
+                                "terminated": False,
                                 "truncated": False,
                                 "score": int(last_score) if last_score is not None else None,
                                 "processed_obs": None,  # no meaningful obs
-                                "info": {"death_frame": death_frame_idx + 1},
+                                "post_terminal": True,
+                                "info": {"death_frame": death_frame_idx + 1, "overlay": True},
                             },
                         )
                         + "\n"

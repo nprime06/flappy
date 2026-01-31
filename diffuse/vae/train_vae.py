@@ -35,6 +35,7 @@ train_config = {
     "kl_weight": 1e-3,
     "grad_weight": 1.0,
     "bird_weight": 10.0,  # extra weight for bird pixels
+    "gameover_weight": 10.0,  # extra weight for game-over sign pixels
     "log_interval": 1,
     "checkpoint_interval": 10,
     "num_workers": 4,
@@ -64,17 +65,32 @@ def get_bird_weight_mask(target, bird_weight=10.0):
     return weights
 
 
+def get_gameover_weight_mask(is_gameover, target, gameover_weight=10.0):
+    # hardcoded game-over sign bounding box
+    # sprite 192x42, placed at x=(288-192)//2=48, y=int(512*0.4)=204
+    B, _, H, W = target.shape
+    weights = torch.ones(B, 1, H, W, device=target.device)
+    for i in range(B):
+        if is_gameover[i]:
+            weights[i, 0, 204:247, 48:241] = gameover_weight
+    return weights
+
+
 def weighted_l1_loss(recon, target, weights):
     return (weights * (recon - target).abs()).mean()
 
 
-def gradient_loss(recon, target): # l1 loss on spatial gradients
+def weighted_gradient_loss(recon, target, weights):
     recon_dx = recon[:, :, :, 1:] - recon[:, :, :, :-1]
     target_dx = target[:, :, :, 1:] - target[:, :, :, :-1]
     recon_dy = recon[:, :, 1:, :] - recon[:, :, :-1, :]
     target_dy = target[:, :, 1:, :] - target[:, :, :-1, :]
-    return F.l1_loss(recon_dx, target_dx) + F.l1_loss(recon_dy, target_dy)
-
+    # slice weights to match gradient tensor sizes
+    weights_dx = weights[:, :, :, 1:]  # W-1
+    weights_dy = weights[:, :, 1:, :]  # H-1
+    grad_x = (weights_dx * (recon_dx - target_dx).abs()).mean()
+    grad_y = (weights_dy * (recon_dy - target_dy).abs()).mean()
+    return grad_x + grad_y
 
 def compute_latent_statistics(model, data_dir, device, num_samples, batch_size):
     model.eval()
@@ -191,7 +207,7 @@ def train(run_dir=None):
         epoch_grad = 0.0
         epoch_kl = 0.0
 
-        for batch in dataloader:
+        for batch, is_gameover in dataloader:
             batch = batch.to(model_config["device"], non_blocking=True)
 
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
@@ -205,8 +221,10 @@ def train(run_dir=None):
                     target = F.interpolate(batch, size=recon.shape[-2:], mode='area')
 
                 bird_weights = get_bird_weight_mask(target, bird_weight=train_config["bird_weight"])
-                l1_loss = weighted_l1_loss(recon, target, bird_weights)
-                grad_loss = gradient_loss(recon, target)
+                gameover_weights = get_gameover_weight_mask(is_gameover, target, gameover_weight=train_config["gameover_weight"])
+                weights = torch.maximum(bird_weights, gameover_weights)
+                l1_loss = weighted_l1_loss(recon, target, weights)
+                grad_loss = weighted_gradient_loss(recon, target, weights)
                 kl_loss = -0.5 * torch.mean(1 + logvar - mean.pow(2) - logvar.exp())
                 loss = l1_loss + train_config["grad_weight"] * grad_loss + train_config["kl_weight"] * kl_loss
 

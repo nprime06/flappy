@@ -37,7 +37,7 @@ def _add_gameover_overlay(img: np.ndarray) -> np.ndarray:
     return np.array(frame_pil.convert("RGB"))
 from diffuse.nn.vae import VAE
 from diffuse.nn.resunet import ResUNet
-from diffuse.ngen.sampler import euler_sample, euler_sample_cfg
+from diffuse.ngen.sampler import euler_sample
 
 # Fallback values (for backward compatibility)
 DEFAULT_LATENT_MEAN = 0.4735
@@ -58,7 +58,13 @@ def load_vae(checkpoint_path, device):
         latent_channels=cfg["latent_channels"],
         num_layers=cfg["num_layers"],
     ).to(device)
-    vae.load_state_dict(ckpt["model"])
+    state_dict = ckpt["model"]
+    
+    # handle compiled model checkpoints (_orig_mod prefix)
+    if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+        state_dict = {key.replace("_orig_mod.", ""): value for key, value in state_dict.items()}
+    
+    vae.load_state_dict(state_dict)
     vae.eval()
     for p in vae.parameters():
         p.requires_grad = False
@@ -76,7 +82,6 @@ def load_vae(checkpoint_path, device):
 
 
 def load_flow_model(checkpoint_path, device):
-    """Load flow model from checkpoint."""
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     cfg = ckpt["model_config"]
     model = ResUNet(
@@ -89,7 +94,13 @@ def load_flow_model(checkpoint_path, device):
         context_size=cfg["context_size"],
         num_aug_bins=cfg["num_aug_bins"],
     ).to(device)
-    model.load_state_dict(ckpt["model"])
+    state_dict = ckpt["model"]
+    
+    # handle compiled model checkpoints (_orig_mod prefix)
+    if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+        state_dict = {key.replace("_orig_mod.", ""): value for key, value in state_dict.items()}
+    
+    model.load_state_dict(state_dict)
     model.eval()
     for p in model.parameters():
         p.requires_grad = False
@@ -148,7 +159,7 @@ def vae_decode(vae, z, latent_mean, latent_std):
 
 def latent_to_image(vae, z, latent_mean, latent_std):
     """Convert latent to displayable image."""
-    with torch.no_grad():
+    with torch.inference_mode():
         x = vae_decode(vae, z, latent_mean, latent_std)
         x = (x + 1) / 2
         x = x.clamp(0, 1)
@@ -158,30 +169,13 @@ def latent_to_image(vae, z, latent_mean, latent_std):
 
 def main():
     parser = argparse.ArgumentParser(description="Play Flappy Bird through the world model")
-    parser.add_argument("--ngen-checkpoint", type=str, required=True,
-                        help="Path to flow model checkpoint")
-    parser.add_argument("--vae-checkpoint", type=str, default=None,
-                        help="Path to VAE checkpoint (reads from ngen config if not specified)")
-    parser.add_argument("--vod-dir", type=str, default=None,
-                        help="Path to vod directory for initial frames")
-    parser.add_argument("--num-steps", type=int, default=50,
-                        help="Number of Euler steps for sampling (match training)")
-    parser.add_argument("--scale", type=int, default=2,
-                        help="Display scale factor")
-    parser.add_argument("--noise-scale", type=float, default=0.0,
-                        help="Scale of noise perturbation for z_0 (0 = pure noise from N(0,1), >0 = perturbation from current)")
-    parser.add_argument("--aug-level", type=int, default=0,
-                        help="Augmentation level at inference (0-15, 0 = no noise on z_cond)")
-    parser.add_argument("--smoothing", type=float, default=0.0,
-                        help="Temporal smoothing factor (0 = none, >0 blends with previous)")
-    parser.add_argument("--done-threshold", type=float, default=0.5,
-                        help="Threshold for done prediction to end game")
-    parser.add_argument("--use-cfg", action="store_true",
-                        help="Use classifier-free guidance during sampling")
-    parser.add_argument("--cfg-scale", type=float, default=1.5,
-                        help="CFG scale (only used with --use-cfg)")
-    parser.add_argument("--debug", action="store_true",
-                        help="Print debug info every frame")
+    parser.add_argument("--ngen-checkpoint", type=str, required=True)
+    parser.add_argument("--vae-checkpoint", type=str, required=True)
+    parser.add_argument("--vod-dir", type=str, required=True)
+    parser.add_argument("--num-steps", type=int, default=50)
+    parser.add_argument("--done-threshold", type=float, default=0.5)
+    parser.add_argument("--cfg-scale", type=float, default=1.5)
+    parser.add_argument("--debug", action="store_true") # print debug info every frame
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -218,7 +212,7 @@ def main():
     past_frames, current_frame = load_initial_frames(vod_dir, k, device)
 
     # Encode initial frames
-    with torch.no_grad():
+    with torch.inference_mode():
         B = 1
         past_flat = past_frames.flatten(0, 1)  # (k, C, H, W)
         z_cond = vae_encode(vae, past_flat, latent_mean, latent_std)  # (k, latent_ch, H', W')
@@ -231,7 +225,7 @@ def main():
 
     # Initialize pygame
     pygame.init()
-    screen = pygame.display.set_mode((W * args.scale, H * args.scale))
+    screen = pygame.display.set_mode((W * 2, H * 2))
     pygame.display.set_caption("Flappy Bird - World Model")
     clock = pygame.time.Clock()
 
@@ -246,8 +240,7 @@ def main():
     # Current latent (the frame we display)
     z_display = z_current
 
-    # aug_level: use median level at inference for stability
-    aug_level = torch.full((1,), args.aug_level, dtype=torch.long, device=device)
+    aug_level = torch.full((1,), 0, dtype=torch.long, device=device) 
 
     running = True
     frame_count = 0
@@ -260,6 +253,9 @@ def main():
     print("\nStarting inference loop...")
 
     manual_death_mode = False  # For testing red tint
+    # When the done head fires, we allow the model to generate N more frames, then freeze.
+    # This lets the world model itself generate a single "game over" frame if it has learned it.
+    stop_countdown: int | None = None
 
     while running:
         # Handle events
@@ -294,48 +290,36 @@ def main():
         actions = torch.tensor([action_buffer + [action]], dtype=torch.long, device=device)  # (1, k+1)
 
         # Sample next frame using flow model
-        with torch.no_grad():
-            # Use pure noise (correct for flow matching) or perturbation if specified
-            if args.noise_scale > 0:
-                z_0 = z_display + args.noise_scale * torch.randn_like(z_display)
-            else:
-                z_0 = torch.randn_like(z_display)
-
-            # Use CFG if enabled
-            if args.use_cfg:
-                z_next = euler_sample_cfg(
+        with torch.inference_mode():
+            z_0 = torch.randn_like(z_display)
+            ngen_start = time.perf_counter()
+            z_next = euler_sample(
                     flow_model, z_0, z_cond, actions, aug_level,
-                    cfg_scale=args.cfg_scale, num_steps=args.num_steps,
-                    num_classes=model_cfg["num_classes"]
+                    cfg_scale=args.cfg_scale, num_steps=args.num_steps
                 )
-            else:
-                z_next = euler_sample(
-                    flow_model, z_0, z_cond, actions, aug_level,
-                    num_steps=args.num_steps
-                )
-
-            # Apply temporal smoothing if enabled
-            if args.smoothing > 0:
-                z_next = (1 - args.smoothing) * z_next + args.smoothing * z_display
 
             # Check done prediction (model always returns done_logit)
             t_final = torch.ones(1, device=device)
             _, done_logit = flow_model(z_next, t_final, z_cond=z_cond, c=actions, aug_level=aug_level)
             done_prob = torch.sigmoid(done_logit).item()
+            ngen_elapsed = time.perf_counter() - ngen_start
             print(f"Frame {frame_count}: done_prob={done_prob:.3f}", end="\r")
             if done_prob > args.done_threshold:
-                print(f"\nGame Over! (done_prob={done_prob:.2f}, frame={frame_count})")
-                running = False
+                if stop_countdown is None:
+                    # Include the current frame + one additional generated frame.
+                    stop_countdown = 2
+                    print(f"\nGame Over detected (done_prob={done_prob:.2f}, frame={frame_count}). "
+                          f"Generating one more frame then freezing...")
 
         # Debug logging
         if args.debug and frame_count % 10 == 0:
             # Test action conditioning: what would happen with opposite action?
-            with torch.no_grad():
+            with torch.inference_mode():
                 alt_action = 1 - action
                 alt_actions = torch.tensor([action_buffer + [alt_action]], dtype=torch.long, device=device)
                 z_next_alt = euler_sample(
                     flow_model, z_0, z_cond, alt_actions, aug_level,
-                    num_steps=args.num_steps
+                    cfg_scale=args.cfg_scale, num_steps=args.num_steps
                 )
                 action_diff = torch.abs(z_next - z_next_alt).mean().item()
 
@@ -351,15 +335,18 @@ def main():
         action_buffer.append(action)
 
         # Decode and display
+        decode_start = time.perf_counter()
         img = latent_to_image(vae, z_display, latent_mean, latent_std)
+        decode_elapsed = time.perf_counter() - decode_start
+        print(
+            f"Frame {frame_count}: ngen={ngen_elapsed:.3f}s, decode={decode_elapsed:.3f}s"
+        )
 
-        # Apply game over overlay for death frames (when done_prob > threshold or manual mode)
-        if done_prob > args.done_threshold or manual_death_mode:
-            img = _add_gameover_overlay(img)
+        # IMPORTANT: no external compositing for "game over" — pixels should come from the model.
 
         # Convert to pygame surface
         surf = pygame.surfarray.make_surface(img.swapaxes(0, 1))
-        surf = pygame.transform.scale(surf, (W * args.scale, H * args.scale))
+        surf = pygame.transform.scale(surf, (W * 2, H * 2))
         screen.blit(surf, (0, 0))
 
         # Show action indicator
@@ -371,6 +358,11 @@ def main():
         # Frame rate control
         clock.tick(30)
         frame_count += 1
+
+        if stop_countdown is not None:
+            stop_countdown -= 1
+            if stop_countdown <= 0:
+                running = False
 
         # FPS counter
         if frame_count % 30 == 0:

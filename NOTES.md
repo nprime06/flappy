@@ -92,3 +92,54 @@ Batches per epoch: 552
 Decoder has 93,243 parameters
 Encoder has 167,118 parameters
 ~10.5 hr training time, 49211MiB / 143771MiB on 1 H200
+
+
+NGEN: (base, no reflow yet) ngen_20260130_145333
+
+model_config = {
+    "in_channels": 4,
+    "hidden_channels": 64,
+    "num_layers": 2,    
+    "embed_dim": 128,
+    "act_embed_dim": 16,
+    "num_classes": 2, 
+    "context_size": 8,
+    "num_aug_bins": 16,
+    "num_epochs": 2048,
+    "batch_size": 4096,
+    "max_aug_std": 0.5,
+    "cfg_dropout_prob": 0.1,
+    "done_loss_weight": 0.1,
+}
+flow model: 3,047,293 parameters
+loaded action_weight=17.74 from encode_config.json
+loaded done_pos_weight=28.44 from encode_config.json
+batches per epoch: 16
+~4 hr training time, idk how much memory used but 2 H200
+
+
+current test_world setup with the above models: 
+HORRIBLE gameplay asdf worse than before, pretty much completely ignores gravity, bird still disappears randomly. wtf. probably even worse than an older checkpoint, ngen_20260126_140734
+
+current performance: with num_steps = 8, uncompiled models, ngen=0.07s, decode =0.008s (~10 fps)
+
+does manage to now end the game but still the bird disappears, etc.
+
+
+
+
+TODO: make 6th to last frame have game over sign (?)
+- make vae have 10x weight for the game over sign
+- think of way to explore super high and low y (have specific data collection where we press no input or spam input)?
+
+
+Do some tests about tweaking model size/depth
+
+
+Note that the way the done head works right now is really weird, cuz in training we train it at every time step, but we only ever use it at t near 1 in inference. issue is that when t is near 0 it might be hard for the model to accurately predict the done state (but there are still conditioning frames)
+
+
+interesting hypotheses
+- observed behavior where the bird dissappears. this should never happen because all training data has a bird, but it could be because of CFG: the unconditional frame just predicts some general frame where bird can be anywhere (TEST THIS hypothesis)
+- adding self attn at ngen bottleneck allows us the model to reason about bird and pipe global position(look for circuits?)
+- cramming all of time, action, and aug level conditioning into one vector is probably okay given that action and aug level are discrete with 2*16 buckets max (test by )

@@ -12,7 +12,7 @@ class LatentTraceDataset(Dataset):
     # all_actions: (k+1,) of actions a_{n-k}, ..., a_{n}; note a_n -> frame_n
     # done: 0, 1
 
-    def __init__(self, latent_vod_dir, k=4):
+    def __init__(self, latent_vod_dir, k):
         self.k = k
 
         self.samples = []

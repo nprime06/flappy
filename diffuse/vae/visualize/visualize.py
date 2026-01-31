@@ -29,6 +29,12 @@ BIRD_COLOR_RANGE = {
     "b_max": 0.3,
 }
 
+# game-over sign bounding box (fixed position, sprite 192x42 on 288x512 frame)
+GAMEOVER_X_MIN = 48
+GAMEOVER_X_MAX = 240
+GAMEOVER_Y_MIN = 204
+GAMEOVER_Y_MAX = 246
+
 def tensor_to_display(tensor):
     img = (tensor + 1) / 2
     img = img.clamp(0, 1)
@@ -215,27 +221,38 @@ def visualize_reconstruction(checkpoint_path, vod_dir, output_path=None,
 def visualize_detection(vod_dir, output_path=None, num_frames=60, fps=30):
     if output_path is None:
         output_path = VISUALIZE_DIR / "bird_detection.gif"
-    
+
     batch, frame_paths, episode_dir, start_idx = load_frames_from_episode(vod_dir, num_frames)
     transform = transforms.ToTensor()
-    
+
+    # determine which frames are last in the episode (game-over)
+    all_episode_frames = sorted(episode_dir.glob("*.png"))
+    last_frame_name = all_episode_frames[-1].name if all_episode_frames else None
+
     gif_frames = []
     detected_count = 0
-    
+
     for path in frame_paths:
         img_pil = Image.open(path).convert("RGB")
         img_tensor = transform(img_pil) * 2 - 1
-        
+
         bbox = detect_bird_bbox(img_tensor)
-        
+
         draw = ImageDraw.Draw(img_pil)
         if bbox is not None:
             x_min, y_min, x_max, y_max = bbox
             draw.rectangle([x_min, y_min, x_max, y_max], outline="red", width=2)
             detected_count += 1
-        
+
+        # draw game-over bounding box on last frame
+        if path.name == last_frame_name:
+            draw.rectangle(
+                [GAMEOVER_X_MIN, GAMEOVER_Y_MIN, GAMEOVER_X_MAX, GAMEOVER_Y_MAX],
+                outline="blue", width=2,
+            )
+
         gif_frames.append(np.array(img_pil))
-    
+
     print(f"Bird detected in {detected_count}/{len(frame_paths)} frames")
     save_gif(gif_frames, output_path, fps)
 
