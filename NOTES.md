@@ -141,7 +141,7 @@ NOTE 1/31: i'll weight done_loss at t near 1 higher while still sampling t rando
 
 interesting hypotheses
 - observed behavior where the bird disappears. this should never happen because all training data has a bird, but it could be because of CFG: the unconditional frame just predicts some general frame where bird can be anywhere (TEST THIS hypothesis)
-- adding self attn at ngen bottleneck allows us the model to reason about bird and pipe global position(look for circuits?). curious about how well this acutally works!
+- adding self attn at ngen bottleneck allows us the model to reason about bird and pipe global position(look for circuits?). curious about how well this acutally works! TODO: will test linear attn, standard mha, and no attn. theoretically gives stronger inductive biases?
 - cramming all of time, action, and aug level conditioning into one vector is probably okay given that action and aug level are discrete with 2*16 buckets max (test by changing size of conditioning vector)
 
 
@@ -156,7 +156,7 @@ For history/bookkeeping:
 - diffuse/ngen/runs/ngen_20260120_194734: added done head. ~65 epochs
 - diffuse/ngen/runs/ngen_20260123_003706: added action weight. ~30 epochs
 - diffuse/ngen/runs/ngen_20260126_140734: added latent-vod. ~1000 epochs
-- diffuse/ngen/runs/ngen_20260126_140734: added done pos loss weight
+- diffuse/ngen/runs/ngen_20260126_140734: added done pos loss weight. EVERYTHING ABOVE IS PRE-ATTN and compatible with old resunet
 - 1/30 notes for last run
 
 question: when did i add ddp ? hmm
@@ -206,3 +206,6 @@ Decoder has 366,187 parameters
 Encoder has 653,614 parameters
 
 ~5.3hr training time, 49369MiB / 143771MiB on each of h200:2
+
+
+NOTE FOR BLOG/BOOKKEEPING: there have not been major arch changes to vae throughout all training runs, only changes to training (such as bird weight) and data collection. There are major arch changes to the resunet (attn and lin attn)

@@ -73,10 +73,10 @@ def load_vae_model(checkpoint_path, device="cpu"):
     config = ckpt.get("model_config", {})
     
     model = VAE(
-        image_channels=config.get("image_channels", 3),
-        hidden_channels=config.get("hidden_channels", 16),
-        latent_channels=config.get("latent_channels", 4),
-        num_layers=config.get("num_layers", 4),
+        image_channels=config.get("image_channels"),
+        hidden_channels=config.get("hidden_channels"),
+        latent_channels=config.get("latent_channels"),
+        num_layers=config.get("num_layers"),
         decoder_hidden_channels=config.get("decoder_hidden_channels"),
         decoder_num_layers=config.get("decoder_num_layers"),
     ).to(device)
