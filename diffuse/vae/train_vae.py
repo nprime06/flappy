@@ -264,9 +264,9 @@ def train(run_dir=None):
             batch = batch.to(device, non_blocking=True)
 
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                encoded = model.encoder(batch)
-                z, mean, logvar = model.reparameterize(encoded, sample=True)
-                recon = model.decoder(z)
+                encoded = raw_model.encoder(batch)
+                z, mean, logvar = raw_model.reparameterize(encoded, sample=True)
+                recon = raw_model.decoder(z)
 
                 # downsample if decoder outputs lower resolution
                 target = batch
