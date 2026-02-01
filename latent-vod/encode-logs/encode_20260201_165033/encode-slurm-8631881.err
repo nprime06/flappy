@@ -1,0 +1,19 @@
+Traceback (most recent call last):
+  File "/home/willzhao/flappy/latent-vod/encode_vod.py", line 214, in <module>
+    main()
+  File "/home/willzhao/flappy/latent-vod/encode_vod.py", line 145, in main
+    vae = load_vae(args.vae_checkpoint, device)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/willzhao/flappy/latent-vod/encode_vod.py", line 26, in load_vae
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/willzhao/flappy/.conda/py31114/lib/python3.11/site-packages/torch/serialization.py", line 1484, in load
+    with _open_file_like(f, "rb") as opened_file:
+         ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/willzhao/flappy/.conda/py31114/lib/python3.11/site-packages/torch/serialization.py", line 759, in _open_file_like
+    return _open_file(name_or_buffer, mode)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/willzhao/flappy/.conda/py31114/lib/python3.11/site-packages/torch/serialization.py", line 740, in __init__
+    super().__init__(open(name, mode))
+                     ^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'home/willzhao/flappy/diffuse/vae/runs/vae_20260201_111550/checkpoints/latest.pt'
