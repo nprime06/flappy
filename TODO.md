@@ -976,3 +976,74 @@ Reduce death frames to 1-2 total:
 - [ ] Recompute `done_pos_weight` (will increase since fewer done=1 frames)
 
 ---
+
+# Chat Notes / Changes Implemented (2026-02-01)
+
+This section documents **everything changed/discussed in the Cursor chat session after** the previous entry above (the one proposing `gameover frames=1`).
+
+## A) Data collection semantics: `terminated` vs game-over overlay
+
+### Decision rationale
+- The world model’s `done` head is trained using per-frame labels parsed from `run_info.jsonl` (`diffuse/ngen/ngen_data.py` uses `terminated_flags[step]` as the `done` label).
+- Having **multiple `terminated=True` frames** at the end of an episode, especially if those frames contain a **game-over sprite overlay**, encourages a shortcut: **overlay pixels ⇒ done**.
+- This is especially problematic because the overlay is a **logging/recording artifact**, not intrinsic game state, and also because long tails of `done=1` frames can pollute context windows (k=8/k=16) with post-terminal content that inference will not naturally see.
+- We decided on a clean semantic split:
+  - **Exactly 1 frame with `terminated=True`**: the true crash frame (the real Gym terminal step).
+  - **Exactly 1 post-terminal frame with the overlay** for visual/behavioral modeling, but **NOT labeled `terminated=True`** (so the done head is not trained to “detect the overlay”).
+
+### Code changes made
+**File: `game/environment.py`**
+- Changed `DEATH_FRAMES` from **5 → 1**.
+- Kept the true crash step’s `terminated` value (from `env.step`) unchanged.
+- For the post-terminal overlay frame(s):
+  - **Still renders and saves the frame with overlay**.
+  - Logs `terminated: False`.
+  - Adds explicit `post_terminal: True` (and `info.overlay: True`) to make filtering/analysis possible downstream.
+
+Net effect: you will now see **1 `terminated=True` record** per episode, plus **1 overlay frame** that is `post_terminal=True` and `terminated=False`.
+
+## B) Inference behavior: let the model generate the overlay pixels
+
+### Decision rationale
+- Requirement: “I want all generated pixels to be from the world model itself so that it decides that it needs to show the game over sign.”
+- With the above dataset change, the model can learn the transition **crash → overlay** (one step), without tying `done` to the overlay artifact.
+- In inference, when the done head fires, we want to allow **exactly one more generated frame** so the model has a chance to output the overlay frame, then freeze.
+
+### Code changes made
+**File: `world/test_world.py`**
+- Added a `stop_countdown` mechanism:
+  - When `done_prob > threshold` first triggers, set `stop_countdown = 2` (current frame + one additional generated frame), and print a message.
+  - Decrement countdown each iteration; when it reaches 0, exit the loop.
+- Explicitly kept “no external compositing” for the overlay (the commented-out `_add_gameover_overlay` remains unused).
+
+## C) Done-head “t imbalance” in training: reweight done loss toward t≈1
+
+### Problem framing
+- In training, the done head is optimized at random noise levels `t ~ Uniform(0,1)` because `flow_matching_loss` constructs `z_t` via interpolation between `z_0` and `z_target`.
+- In inference, the done head is queried at **t = 1** on a near-clean sample (the generated `z_next`).
+- Philosophy chosen: **Philosophy A** — deliberately bias the done-learning signal toward near-clean inputs while keeping the flow objective unchanged.
+
+### Implementation plan chosen
+- Use a power-law weight on done loss: \(w(t) = t^\alpha\).
+- Use **mean-1 normalization** under `t ~ Uniform(0,1)` so overall scale is stable:
+  - \(E[t^\alpha] = 1/(\alpha+1)\)
+  - \(\tilde{w}(t) = (\alpha+1)\,t^\alpha\)
+- Default selected: **\(\alpha = 4\)** → \(\tilde{w}(t) = 5t^4\)
+- Logging requirement: keep printing/logging the **raw, unweighted** done loss so runs remain directly comparable.
+
+### Code changes made
+**File: `diffuse/ngen/loss.py`**
+- Added arg `done_t_power: float = 0.0`.
+- Computes:
+  - `done_loss_raw`: unweighted BCE (mean), returned for logging.
+  - `done_loss_weighted`: per-sample BCE multiplied by \(\tilde{w}(t)\), used only inside `total_loss`.
+- Total loss now uses: `total_loss = flow_loss + done_loss_weight * done_loss_weighted`.
+
+**File: `diffuse/ngen/train_ngen.py`**
+- Added `train_config["done_t_power"] = 4.0`.
+- Passed `done_t_power=train_config["done_t_power"]` into `flow_matching_loss(...)`.
+- Training log output remains the returned `done_loss` (now `done_loss_raw`), so the numeric series is comparable to older runs.
+
+## D) Lint/status
+- Ran lints on edited files (`game/environment.py`, `world/test_world.py`, `diffuse/ngen/loss.py`, `diffuse/ngen/train_ngen.py`) and **no linter errors were introduced**.
+

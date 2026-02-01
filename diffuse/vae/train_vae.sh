@@ -3,6 +3,7 @@
 # USE THE SUBMIT WRAPPER!
 #
 # expected environment variables (set by submit_vae.sh):
+#   NUM_GPUS   - number of gpus to use
 #   TRAIN_ARGS - arguments for train_vae.py
 
 set -euo pipefail
@@ -17,8 +18,10 @@ export PYTHONUNBUFFERED=1
 export PYTHONPATH="/home/willzhao/flappy/diffuse:${PYTHONPATH:-}"
 
 echo "starting vae training"
+echo "  num gpus: $NUM_GPUS"
 echo "  train args: $TRAIN_ARGS"
 echo "  slurm job id: $SLURM_JOB_ID"
 echo "  cuda visible devices: ${CUDA_VISIBLE_DEVICES:-not set}"
 
-python /home/willzhao/flappy/diffuse/vae/train_vae.py $TRAIN_ARGS
+torchrun --standalone --nproc_per_node=$NUM_GPUS \
+    /home/willzhao/flappy/diffuse/vae/train_vae.py $TRAIN_ARGS

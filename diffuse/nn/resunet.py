@@ -8,7 +8,7 @@ class ResUNet(nn.Module):  # context_size = k (number of context latent frames)
     def __init__(self, in_channels, hidden_channels, num_layers, embed_dim, act_embed_dim, num_classes, context_size, num_aug_bins):
         super().__init__()
         self.time_embedding = TimeEmbedding(embed_dim=embed_dim)  # already activated
-        self.class_embedding = nn.Embedding(num_classes + 1, act_embed_dim)  # +1 for cfg null token
+        self.class_embedding = nn.Embedding(num_classes, act_embed_dim)
         # k+1 actions: k actions for context frames + 1 action causing target
         self.class_proj = nn.Sequential(nn.SiLU(), nn.Linear(act_embed_dim * (context_size + 1), embed_dim))
         self.class_act = nn.SiLU()
@@ -23,6 +23,9 @@ class ResUNet(nn.Module):  # context_size = k (number of context latent frames)
         self.down_blocks = nn.ModuleList(down_blocks_list)
 
         self.bot = ResBlock(hidden_channels * 2**(num_layers - 1), hidden_channels * 2**num_layers, embed_dim)
+        bot_channels = hidden_channels * 2**num_layers
+        self.bot_attn_norm = nn.GroupNorm(1, bot_channels)
+        self.bot_attn = nn.MultiheadAttention(bot_channels, num_heads=8, batch_first=True)
         self.done_head = nn.Sequential(
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
@@ -56,6 +59,12 @@ class ResUNet(nn.Module):  # context_size = k (number of context latent frames)
             x, skip = checkpoint(down_block, x, t_emb, c_emb, aug_emb, use_reentrant=False)
             skip_connections.append(skip)
         x = checkpoint(self.bot, x, t_emb, c_emb, aug_emb, use_reentrant=False)
+
+        # self-attention at bottleneck (spatial is small, e.g. 8x5 = 40 tokens)
+        B_attn, C_attn, H_attn, W_attn = x.shape
+        x_flat = self.bot_attn_norm(x).reshape(B_attn, C_attn, -1).permute(0, 2, 1)  # (B, HW, C)
+        attn_out, _ = self.bot_attn(x_flat, x_flat, x_flat)
+        x = x + attn_out.permute(0, 2, 1).reshape(B_attn, C_attn, H_attn, W_attn)
 
         done_logit = self.done_head(x)
 

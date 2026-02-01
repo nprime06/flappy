@@ -3,31 +3,38 @@
 #
 # USAGE:
 #   ./submit_vae.sh
+#   ./submit_vae.sh --gpus 2
 #   ./submit_vae.sh --run-dir /path/to/run  # resume run (use full absolute path)
 
 set -euo pipefail
 
-# always 1 gpu (no ddp setup)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN_DIR=""
-NUM_CPUS=16
-TOTAL_MEM=128
+NUM_GPUS=2
+CPUS_PER_GPU=8
+MEM_PER_GPU=128
 TIME="6:00:00"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --gpus)
+            NUM_GPUS="$2"
+            shift 2
+            ;;
         --run-dir)
             RUN_DIR="$2"
             shift 2
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--run-dir DIR]"
+            echo "Usage: $0 [--gpus N] [--run-dir DIR]"
             exit 1
             ;;
     esac
 done
 
+NUM_CPUS=$((NUM_GPUS * CPUS_PER_GPU))
+TOTAL_MEM=$((NUM_GPUS * MEM_PER_GPU))
 
 # create run directory if not resuming
 RUNS_DIR="${SCRIPT_DIR}/runs"
@@ -47,11 +54,11 @@ sbatch \
     --ntasks=1 \
     --cpus-per-task=$NUM_CPUS \
     --mem=${TOTAL_MEM}G \
-    --gres=gpu:h200:1 \
+    --gres=gpu:h200:$NUM_GPUS \
     --time=$TIME \
     --output="${RUN_DIR}/slurm-%j.log" \
     --error="${RUN_DIR}/slurm-%j.err" \
-    --export=ALL,TRAIN_ARGS="$TRAIN_ARGS" \
+    --export=ALL,NUM_GPUS=$NUM_GPUS,TRAIN_ARGS="$TRAIN_ARGS" \
     "${SCRIPT_DIR}/train_vae.sh"
 
 echo "logs in $RUN_DIR"

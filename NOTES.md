@@ -13,7 +13,6 @@ Usage and file structure:
 Refactor/cleanup 1/24: 
 - cleaned up stupid ass claude code in nn/
 - need to change dataloader to return k actions total including current action
-- 
 
 # VOD: the very first frame right after gym.make is NOT saved
 
@@ -43,7 +42,7 @@ Note that in CFG we zero out the conditioning latents, instead of normal (where 
 
 
 
-Things to clean: 
+Things to clean 1/26: 
 game/
 - environment.py
 - combine test_environment and test (one is play one is record)
@@ -128,18 +127,66 @@ does manage to now end the game but still the bird disappears, etc.
 
 
 
-TODO: make 6th to last frame have game over sign (?)
-- make vae have 10x weight for the game over sign
-- think of way to explore super high and low y (have specific data collection where we press no input or spam input)?
+TODO: make 6th to last frame have game over sign (?) NOTES 1/31: removed game over sign termination=True, and changed it to 1 game over sign frame
+- make vae have 10x weight for the game over sign NOTES 1/31: DONE
+- think of way to explore super high and low y (have specific data collection where we press no input or spam input)? NOTES 1/31: Just threw more data with wider p_stim p_freeze range hope it works!
+
 
 
 Do some tests about tweaking model size/depth
 
 
-Note that the way the done head works right now is really weird, cuz in training we train it at every time step, but we only ever use it at t near 1 in inference. issue is that when t is near 0 it might be hard for the model to accurately predict the done state (but there are still conditioning frames)
-
+Note that the way the done head works right now is really weird, cuz in training we train it at every time step, but we only ever use it at t near 1 in inference. issue is that when t is near 0 it might be hard for the model to accurately predict the done state (but there are still conditioning frames). 
+NOTE 1/31: i'll weight done_loss at t near 1 higher while still sampling t randomly. more details in TODO.md
 
 interesting hypotheses
-- observed behavior where the bird dissappears. this should never happen because all training data has a bird, but it could be because of CFG: the unconditional frame just predicts some general frame where bird can be anywhere (TEST THIS hypothesis)
-- adding self attn at ngen bottleneck allows us the model to reason about bird and pipe global position(look for circuits?)
-- cramming all of time, action, and aug level conditioning into one vector is probably okay given that action and aug level are discrete with 2*16 buckets max (test by )
+- observed behavior where the bird disappears. this should never happen because all training data has a bird, but it could be because of CFG: the unconditional frame just predicts some general frame where bird can be anywhere (TEST THIS hypothesis)
+- adding self attn at ngen bottleneck allows us the model to reason about bird and pipe global position(look for circuits?). curious about how well this acutally works!
+- cramming all of time, action, and aug level conditioning into one vector is probably okay given that action and aug level are discrete with 2*16 buckets max (test by changing size of conditioning vector)
+
+
+
+
+For history/bookkeeping: 
+- diffuse/vae/runs/vae_20260115_022006: trained before bird weight loss (can compare resolution)
+- diffuse/vae/runs/vae_20260125_125114: full training run, before game over sign added
+- diffuse/vae/runs/vae_20260129_224946: full training run, with game over sign added (see 1/29 run notes)
+
+- diffuse/ngen/runs/ngen_20260116_184728: trained before first encoding everything to latent lol. stupid slow training. ~40 epochs
+- diffuse/ngen/runs/ngen_20260120_194734: added done head. ~65 epochs
+- diffuse/ngen/runs/ngen_20260123_003706: added action weight. ~30 epochs
+- diffuse/ngen/runs/ngen_20260126_140734: added latent-vod. ~1000 epochs
+- diffuse/ngen/runs/ngen_20260126_140734: added done pos loss weight
+- 1/30 notes for last run
+
+question: when did i add ddp ? hmm
+
+
+TRAINING NOTES FOR 1/31 RUN: 
+
+DATA COLLECTION: 
+EPISODE_COUNTS = {
+    (0.0, 0.0): 330,
+    (0.0, 0.1): 165,
+    (0.0, 0.2): 165,
+    (0.0, 0.3): 165,
+
+    (0.01, 0.0): 165,
+    (0.01, 0.1): 165,
+    (0.01, 0.2): 165,
+    (0.01, 0.3): 165,
+    
+    (0.02, 0.0): 165,
+    (0.02, 0.1): 165,
+    (0.02, 0.2): 165,
+    (0.02, 0.3): 165,
+
+    (0.03, 0.0): 165,
+    (0.03, 0.1): 165,
+    (0.03, 0.2): 165,
+    (0.03, 0.3): 165,
+
+    (0.05, 0.5): 330,
+}
+15566.23s of data = 4.3hr = 466,987 frames. 3135 runs total
+

@@ -24,27 +24,28 @@ from ngen.sampler import ReflowPairGenerator
 
 
 model_config = {
-    "in_channels": 4,           # latent_channels from VAE
-    "hidden_channels": 64,
-    "num_layers": 2,            # limited by odd bottleneck width (9)
+    "in_channels": 4, 
+    "hidden_channels": 128, 
+    "num_layers": 2,
     "embed_dim": 128,
     "act_embed_dim": 16,
-    "num_classes": 2,           # flappy bird: 0=no-flap, 1=flap
-    "context_size": 8,          # k past latents + k+1 actions
-    "num_aug_bins": 16,
+    "num_classes": 2,
+    "context_size": 16, # 0.53s
+    "num_aug_bins": 10, 
 }
 
 train_config = {
     "lr": 1e-4,
     "num_epochs": 2048,
     "batch_size": 4096,
-    "max_aug_std": 0.5,
+    "max_aug_std": 0.7,
     "checkpoint_interval": 200,
     "num_workers": 4,
 
     "reflow_steps": 50,
     "cfg_dropout_prob": 0.1,
     "done_loss_weight": 0.1,    # weight for done head BCE loss
+    "done_t_power": 4.0,        # emphasize done loss via normalized w(t)=t^4
     "runs_dir": "/home/willzhao/flappy/diffuse/ngen/runs",
     "device": "cuda" if torch.cuda.is_available() else "cpu",
 }
@@ -247,8 +248,7 @@ def train(latent_vod=None, run_dir=None, reflow_checkpoint=None):
 
             if train_config["cfg_dropout_prob"] > 0:
                 cfg_mask = torch.rand(B, device=device) < train_config["cfg_dropout_prob"]
-                z_cond = torch.where(cfg_mask.view(B, 1, 1, 1), torch.zeros_like(z_cond), z_cond) # null conditioning
-                actions = torch.where(cfg_mask.view(B, 1), torch.full_like(actions, model_config["num_classes"]), actions) # null token (num_classes = 2)
+                z_cond = torch.where(cfg_mask.view(B, 1, 1, 1), torch.zeros_like(z_cond), z_cond) # gamengen: only drop frames not actions
 
             if reflow_generator is not None:
                 z_0 = reflow_generator.generate(z_target, z_cond, actions, aug_level)
@@ -259,7 +259,8 @@ def train(latent_vod=None, run_dir=None, reflow_checkpoint=None):
                 loss, flow_loss, done_loss = flow_matching_loss(
                     model, z_target, z_cond, actions, aug_level, z_0=z_0,
                     done_labels=done_labels, done_loss_weight=train_config["done_loss_weight"],
-                    action_weight=train_config["action_weight"], done_pos_weight=train_config["done_pos_weight"]
+                    action_weight=train_config["action_weight"], done_pos_weight=train_config["done_pos_weight"],
+                    done_t_power=train_config["done_t_power"],
                 )
 
             optimizer.zero_grad()
