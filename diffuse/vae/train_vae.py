@@ -33,14 +33,14 @@ model_config = {
 
 train_config = {
     "lr": 1e-4,
-    "num_epochs": 20,
+    "num_epochs": 40,
     "batch_size": 128,
     "kl_weight": 1e-3,
     "grad_weight": 1.0,
     "bird_weight": 10.0,  # extra weight for bird pixels
     "gameover_weight": 10.0,  # extra weight for game-over sign pixels
     "log_interval": 1,
-    "checkpoint_interval": 5,
+    "checkpoint_interval": 10,
     "num_workers": 4,
     "data_dir": "/home/willzhao/flappy/vod",
     "runs_dir": "/home/willzhao/flappy/diffuse/vae/runs",
