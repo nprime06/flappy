@@ -190,3 +190,19 @@ EPISODE_COUNTS = {
 }
 15566.23s of data = 4.3hr = 466,987 frames. 3135 runs total
 
+
+FIRST VAE TEST RUN (vae_20260201_004112): 
+
+{
+    "image_channels": 3,
+    "hidden_channels": 32,
+    "latent_channels": 4,
+    "num_layers": 3,
+    "num_epochs": 200,
+    "batch_size": 128,
+}
+Batches per epoch: 1824
+Decoder has 366,187 parameters
+Encoder has 653,614 parameters
+
+49369MiB / 143771MiB on each of h200:2
