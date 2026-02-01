@@ -14,7 +14,6 @@ eval "$(conda shell.bash hook)"
 conda activate /home/willzhao/flappy/.conda/py31114
 
 export PYTHONUNBUFFERED=1
-export PYTHONPATH="/home/willzhao/flappy/latent-vod:${PYTHONPATH:-}"
 
 echo "starting vod encoding"
 echo "  encode args: $ENCODE_ARGS"

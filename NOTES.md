@@ -160,9 +160,11 @@ For history/bookkeeping:
 - 1/30 notes for last run
 
 question: when did i add ddp ? hmm
+NOTE: check latent-vod/encode-logs/ to see what vae each ngen run corresponds to 
+NOTE FOR BLOG/BOOKKEEPING: there have not been major arch changes to vae throughout all training runs, only changes to training (such as bird weight) and data collection. There are major arch changes to the resunet (attn and lin attn)
 
 
-TRAINING NOTES FOR 1/31 RUN: 
+# TRAINING NOTES FOR 1/31 RUN: 
 
 DATA COLLECTION: 
 EPISODE_COUNTS = {
@@ -191,7 +193,7 @@ EPISODE_COUNTS = {
 15566.23s of data = 4.3hr = 466,987 frames. 3135 runs total
 
 
-FIRST VAE TEST RUN (vae_20260201_111550): 
+FIRST VAE TEST RUN (vae_20260201_111550): DONE!!!!
 
 {
     "image_channels": 3,
@@ -208,4 +210,10 @@ Encoder has 653,614 parameters
 ~5.3hr training time, 49369MiB / 143771MiB on each of h200:2
 
 
-NOTE FOR BLOG/BOOKKEEPING: there have not been major arch changes to vae throughout all training runs, only changes to training (such as bird weight) and data collection. There are major arch changes to the resunet (attn and lin attn)
+ENCODE VOD: 
+
+
+Notes: 
+- Vae accomplishes super crisp reconstruction of gameover sign now
+
+

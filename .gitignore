@@ -162,6 +162,7 @@ vod/*
 trained_model/
 runs/
 latent-vod/*
+diffuse/vae/visualize/latent_space.py
 !latent-vod/encode_vod.py
 !latent-vod/encode_vod.sh
 !latent-vod/submit_encode.sh
