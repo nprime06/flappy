@@ -23,7 +23,8 @@ def flow_matching_loss(model, z_target, z_cond, actions, aug_level, z_0=None,
 
     target_action = actions[:, -1]  # (B,), target action
     weights = torch.where(target_action == 1, action_weight, 1.0)
-    flow_loss = (mse_per_sample * weights).mean()
+    weights = weights.to(dtype=mse_per_sample.dtype) # weighted mean for stable per-batch magnitude
+    flow_loss = (mse_per_sample * weights).sum() / weights.sum().clamp_min(1e-12)
 
     pos_weight = torch.tensor(done_pos_weight, device=done_logit.device, dtype=done_logit.dtype)
     done_bce_per_sample = F.binary_cross_entropy_with_logits(
@@ -32,8 +33,10 @@ def flow_matching_loss(model, z_target, z_cond, actions, aug_level, z_0=None,
         pos_weight=pos_weight,
         reduction="none",
     )  # (B,)
+    # weight done loss by normalized w(t) ∝ t^alpha.
     w_norm = (done_t_power + 1.0) * torch.pow(t, done_t_power)  # mean-1 under t~U(0,1)
-    done_loss = (done_bce_per_sample * w_norm).mean()
+    w_norm = w_norm.to(dtype=done_bce_per_sample.dtype) # weighted mean for stable per-batch magnitude
+    done_loss = (done_bce_per_sample * w_norm).sum() / w_norm.sum().clamp_min(1e-12)
 
     total_loss = flow_loss + done_loss_weight * done_loss
     return total_loss, flow_loss, done_loss
