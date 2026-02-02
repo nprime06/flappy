@@ -66,7 +66,7 @@ class ResUNet(nn.Module):  # context_size = k (number of context latent frames)
         attn_out, _ = self.bot_attn(x_flat, x_flat, x_flat)
         x = x + attn_out.permute(0, 2, 1).reshape(B_attn, C_attn, H_attn, W_attn)
 
-        done_logit = self.done_head(x)
+        done_logit = self.done_head(x.detach())
 
         for up_block in self.up_blocks:
             x = checkpoint(up_block, x, skip_connections.pop(), t_emb, c_emb, aug_emb, use_reentrant=False)

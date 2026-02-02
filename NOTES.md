@@ -211,12 +211,20 @@ Encoder has 653,614 parameters
 
 
 ENCODE VOD: 
+latent-vod/encode-logs/encode_20260201_170257
 
 
+
+NGEN RUN 1: shorter training: diffuse/ngen/runs/ngen_20260201_203235
 
 88669MiB / 143771MiB
 Notes: 
 - Vae accomplishes super crisp reconstruction of gameover sign now
 
 
-TF32
+right now the model sucks. whenever the bird approaches a pipe, it suddenly disappears
+
+
+
+
+question: TF32???
