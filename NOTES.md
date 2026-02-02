@@ -214,9 +214,9 @@ ENCODE VOD:
 
 
 
-97973MiB / 143771MiB
-
+88669MiB / 143771MiB
 Notes: 
 - Vae accomplishes super crisp reconstruction of gameover sign now
 
 
+TF32
