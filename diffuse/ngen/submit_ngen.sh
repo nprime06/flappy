@@ -16,8 +16,6 @@ LATENT_VOD=""
 NUM_GPUS=1
 CPUS_PER_GPU=8
 MEM_PER_GPU=128
-NUM_CPUS=$((NUM_GPUS * CPUS_PER_GPU))
-TOTAL_MEM=$((NUM_GPUS * MEM_PER_GPU))
 TIME="6:00:00"
 
 while [[ $# -gt 0 ]]; do
@@ -45,6 +43,9 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+NUM_CPUS=$((NUM_GPUS * CPUS_PER_GPU))
+TOTAL_MEM=$((NUM_GPUS * MEM_PER_GPU))
 
 if [[ -z "$LATENT_VOD" ]]; then
     echo "Error: --latent-vod is required"

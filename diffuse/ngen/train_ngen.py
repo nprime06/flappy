@@ -163,8 +163,8 @@ def train(latent_vod=None, run_dir=None, reflow_checkpoint=None):
                 if latent_vod and is_main:
                     print(f"loaded latent_vod from config: {latent_vod}")
 
-    config_path = Path(latent_vod) / "encode_config.json"
-    with open(config_path, "r") as f:
+    encode_config_path = Path(latent_vod) / "encode_config.json"
+    with open(encode_config_path, "r") as f:
         config = json.load(f)
     train_config["action_weight"] = config.get("action_weight")
     train_config["done_pos_weight"] = config.get("done_pos_weight")
