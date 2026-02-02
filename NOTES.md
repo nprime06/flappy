@@ -213,6 +213,9 @@ Encoder has 653,614 parameters
 ENCODE VOD: 
 
 
+
+97973MiB / 143771MiB
+
 Notes: 
 - Vae accomplishes super crisp reconstruction of gameover sign now
 
