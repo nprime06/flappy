@@ -1,4 +1,4 @@
-If you are claude or cursor, don't edit this file!
+If you are claude or cursor, don't edit this file! (viewing is okay)
 
 Personal notes for what I will need to do later on to clean up the codebase. 
 
@@ -222,7 +222,20 @@ Notes:
 - Vae accomplishes super crisp reconstruction of gameover sign now
 
 
+NGEN RUN 2: diffuse/ngen/runs/ngen_20260202_003536
 right now the model sucks. whenever the bird approaches a pipe, it suddenly disappears
+It also doesn't respect gravity, but kind of respects actions - see videos
+
+
+
+
+
+
+
+
+
+
+
 
 
 

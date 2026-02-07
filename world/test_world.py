@@ -230,15 +230,27 @@ def main():
     clock = pygame.time.Clock()
 
     # Frame buffer: list of k latents for conditioning
+    # Initially contains frames[0] through frames[k-1] from the VOD
     frame_buffer = [z_cond[:, i*model_cfg["in_channels"]:(i+1)*model_cfg["in_channels"]]
                     for i in range(k)]
 
     # Action buffer: list of k past actions for conditioning
     # Initialize with k no-flap actions (0)
+    # These represent actions[0] through actions[k-1] that caused frames[1] through frames[k]
     action_buffer = [0] * k
 
     # Current latent (the frame we display)
+    # Initially this is frame[k] from the VOD
     z_display = z_current
+    
+    print(f"\nInitial state (loaded from VOD):")
+    print(f"  frame_buffer: VOD frames[0] to VOD frames[{k-1}] (k={k} context frames)")
+    print(f"  action_buffer: [0, 0, ..., 0] (k={k} dummy actions, we don't know real VOD actions)")
+    print(f"  z_display: VOD frame[{k}] (will be displayed, then used in next prediction)")
+    print(f"\nLoop iteration frame_count=0 will:")
+    print(f"  - Display VOD frame[{k}]")
+    print(f"  - Get user action")
+    print(f"  - Predict first generated frame using VOD frames[0:{k}] + user action")
 
     aug_level = torch.full((1,), 0, dtype=torch.long, device=device) 
 
@@ -258,6 +270,27 @@ def main():
     stop_countdown: int | None = None
 
     while running:
+        # ============================================================================
+        # ACTION-FRAME ALIGNMENT EXPLANATION
+        # ============================================================================
+        # At the start of iteration for frame_count=t:
+        #   - z_display = frame[t-1] (what we just displayed)
+        #   - frame_buffer = [frame[t-k-1], ..., frame[t-2]]  (k old context frames)
+        #   - action_buffer = [action[t-k-1], ..., action[t-2]]  (k old actions)
+        #
+        # We will:
+        #   1. Get action[t-1] from user input (action taken NOW at frame[t-1])
+        #   2. Update frame_buffer: pop oldest, append frame[t-1] (z_display)
+        #      -> frame_buffer = [frame[t-k], ..., frame[t-1]]
+        #   3. Build actions: [action[t-k], ..., action[t-1]] (k+1 actions total)
+        #      - First k actions caused the k context frames
+        #      - Last action (action[t-1]) will cause frame[t] (the target)
+        #   4. Predict frame[t] using context frames[t-k:t] and actions[t-k:t]
+        #   5. Update: z_display = frame[t], action_buffer = [action[t-k], ..., action[t-1]]
+        #
+        # Key: action[i] taken at frame[i] causes transition to frame[i+1]
+        # ============================================================================
+        
         # Handle events
         action = 0  # no flap by default
         for event in pygame.event.get():
@@ -288,6 +321,30 @@ def main():
         # Build actions tensor: k actions that caused context frames + action causing target
         # action_buffer contains k actions for context, current action is for target
         actions = torch.tensor([action_buffer + [action]], dtype=torch.long, device=device)  # (1, k+1)
+        
+        # ACTION ALIGNMENT VERIFICATION
+        # Log the action-frame relationship every frame
+        if frame_count % 30 == 0 or frame_count < 10:
+            print(f"\n{'='*80}")
+            print(f"PREDICTING FRAME {frame_count} - ACTION ALIGNMENT CHECK")
+            print(f"{'='*80}")
+            print(f"Context frames in frame_buffer (after update):")
+            print(f"  frame_buffer contains: frames[{frame_count-k}] through frames[{frame_count-1}]")
+            print(f"  (k={k} frames used as conditioning)")
+            print(f"\nAction-Frame causality mapping:")
+            for i in range(k):
+                frame_idx = frame_count - k + i
+                act = action_buffer[i]
+                next_frame_idx = frame_idx + 1
+                print(f"  actions[{i}] = {act} (action at frame[{frame_idx}]) -> caused frame[{next_frame_idx}]")
+            print(f"  actions[{k}] = {action} (action at frame[{frame_count-1}]) -> will cause frame[{frame_count}] (TARGET)")
+            print(f"\nActions tensor passed to model: {actions[0].tolist()}")
+            print(f"  Shape: {actions.shape} = (batch_size=1, k+1={k+1})")
+            print(f"\nConditioning tensors:")
+            print(f"  z_cond.shape: {z_cond.shape} = (1, k*latent_ch={k*model_cfg['in_channels']}, H, W)")
+            print(f"  z_0.shape (noise): will be {z_display.shape}")
+            print(f"\nTarget to predict: frame[{frame_count}]")
+            print(f"{'='*80}\n")
 
         # Sample next frame using flow model
         with torch.inference_mode():
@@ -303,7 +360,19 @@ def main():
             _, done_logit = flow_model(z_next, t_final, z_cond=z_cond, c=actions, aug_level=aug_level)
             done_prob = torch.sigmoid(done_logit).item()
             ngen_elapsed = time.perf_counter() - ngen_start
-            print(f"Frame {frame_count}: done_prob={done_prob:.3f}", end="\r")
+            
+            # Log alignment verification after prediction
+            if frame_count % 30 == 0 or frame_count < 10:
+                print(f"✓ PREDICTION COMPLETE for frame[{frame_count}]:")
+                print(f"  Context used: frames[{frame_count-k}] to frames[{frame_count-1}]")
+                print(f"  Actions used: actions[{frame_count-k}] to actions[{frame_count-1}]")
+                print(f"  Key: action[{frame_count-1}]={action} caused frame[{frame_count}]")
+                print(f"  Done probability: {done_prob:.3f}")
+                print(f"  Timing: ngen={ngen_elapsed:.3f}s")
+                print()
+            else:
+                print(f"Frame {frame_count}: done_prob={done_prob:.3f}", end="\r")
+            
             if done_prob > args.done_threshold:
                 if stop_countdown is None:
                     # Include the current frame + one additional generated frame.
@@ -333,6 +402,13 @@ def main():
         z_display = z_next
         action_buffer.pop(0)
         action_buffer.append(action)
+        
+        # Verify state after update (for next iteration)
+        if (frame_count % 30 == 0 or frame_count < 10) and frame_count < 5:
+            print(f"State after update (ready for frame[{frame_count+1}]):")
+            print(f"  z_display: now frame[{frame_count}]")
+            print(f"  action_buffer: {action_buffer} (actions[{frame_count-k+1}] to actions[{frame_count}])")
+            print()
 
         # Decode and display
         decode_start = time.perf_counter()

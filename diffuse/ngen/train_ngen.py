@@ -25,12 +25,12 @@ from ngen.sampler import ReflowPairGenerator
 
 model_config = {
     "in_channels": 4, 
-    "hidden_channels": 128, 
+    "hidden_channels": 64, 
     "num_layers": 2,
     "embed_dim": 128,
     "act_embed_dim": 16,
     "num_classes": 2,
-    "context_size": 16, # 0.53s
+    "context_size": 4, # 0.53s
     "num_aug_bins": 10, 
 }
 

@@ -8,16 +8,17 @@ class ResUNet(nn.Module):  # context_size = k (number of context latent frames)
     def __init__(self, in_channels, hidden_channels, num_layers, embed_dim, act_embed_dim, num_classes, context_size, num_aug_bins):
         super().__init__()
         self.time_embedding = TimeEmbedding(embed_dim=embed_dim)  # already activated
-        self.class_embedding = nn.Embedding(num_classes, act_embed_dim)
-        # k+1 actions: k actions for context frames + 1 action causing target
-        self.class_proj = nn.Sequential(nn.SiLU(), nn.Linear(act_embed_dim * (context_size + 1), embed_dim))
-        self.class_act = nn.SiLU()
         self.aug_embedding = nn.Embedding(num_aug_bins, embed_dim)
         self.aug_act = nn.SiLU()
-        # all these embeddings are one-time
 
-        # down: in * (k+1) -> h, h -> 2h, ... 2**(num_layers - 2)h -> 2**(num_layers - 1)h
-        down_blocks_list = [DownResBlock(in_channels * (context_size + 1), hidden_channels, embed_dim)]
+        # target action spatial conditioning: embed -> project -> broadcast to (B, act_spatial_channels, H, W)
+        self.act_spatial_channels = act_embed_dim  # use act_embed_dim as spatial channel count
+        self.class_embedding = nn.Embedding(num_classes, act_embed_dim)
+        self.class_spatial_proj = nn.Linear(act_embed_dim, self.act_spatial_channels)
+
+        # down: in * (k+1) + act_spatial -> h, h -> 2h, ... 2**(num_layers - 2)h -> 2**(num_layers - 1)h
+        first_in_channels = in_channels * (context_size + 1) + self.act_spatial_channels
+        down_blocks_list = [DownResBlock(first_in_channels, hidden_channels, embed_dim)]
         for i in range(num_layers - 1):
             down_blocks_list.append(DownResBlock(hidden_channels * 2**i, hidden_channels * 2**(i + 1), embed_dim))
         self.down_blocks = nn.ModuleList(down_blocks_list)
@@ -45,22 +46,27 @@ class ResUNet(nn.Module):  # context_size = k (number of context latent frames)
     def forward(self, x, t, z_cond, c, aug_level):
         # x: (B, C, H, W), t: (B,), z_cond: (B, C * k, H, W), c: (B, k+1), aug_level: (B,)
         # c contains k+1 actions: [a_{t-k}, ..., a_{t-1}, a_t] where a_t causes the target
-        x = torch.cat([x, z_cond], dim=1)
+        B, C, H, W = x.shape
+
+        # extract target action (last in sequence) and broadcast spatially
+        target_action = c[:, -1]  # (B,)
+        action_emb = self.class_embedding(target_action)  # (B, act_embed_dim)
+        action_spatial = self.class_spatial_proj(action_emb)  # (B, act_spatial_channels)
+        action_spatial = action_spatial.unsqueeze(-1).unsqueeze(-1).expand(B, -1, H, W)  # (B, act_spatial_channels, H, W)
+
+        # concat: noisy target + context frames + spatial action
+        x = torch.cat([x, z_cond, action_spatial], dim=1)
 
         t_emb = self.time_embedding(t)
-        action_emb = self.class_embedding(c)
-        action_emb = action_emb.flatten(1)
-        c_emb = self.class_act(self.class_proj(action_emb))
         aug_emb = self.aug_act(self.aug_embedding(aug_level))
-        # get (B, emb_dim)
 
         skip_connections = []
         for down_block in self.down_blocks:
-            x, skip = checkpoint(down_block, x, t_emb, c_emb, aug_emb, use_reentrant=False)
+            x, skip = checkpoint(down_block, x, t_emb, aug_emb, use_reentrant=False)
             skip_connections.append(skip)
-        x = checkpoint(self.bot, x, t_emb, c_emb, aug_emb, use_reentrant=False)
+        x = checkpoint(self.bot, x, t_emb, aug_emb, use_reentrant=False)
 
-        # self-attention at bottleneck, 9*16=144 tokens
+        # self-attention at bottleneck
         B_attn, C_attn, H_attn, W_attn = x.shape
         x_flat = self.bot_attn_norm(x).reshape(B_attn, C_attn, -1).permute(0, 2, 1)  # (B, HW, C)
         attn_out, _ = self.bot_attn(x_flat, x_flat, x_flat)
@@ -69,7 +75,7 @@ class ResUNet(nn.Module):  # context_size = k (number of context latent frames)
         done_logit = self.done_head(x.detach())
 
         for up_block in self.up_blocks:
-            x = checkpoint(up_block, x, skip_connections.pop(), t_emb, c_emb, aug_emb, use_reentrant=False)
+            x = checkpoint(up_block, x, skip_connections.pop(), t_emb, aug_emb, use_reentrant=False)
         x = self.out_conv(x)
 
         return x, done_logit

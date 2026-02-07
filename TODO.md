@@ -1047,3 +1047,60 @@ Net effect: you will now see **1 `terminated=True` record** per episode, plus **
 ## D) Lint/status
 - Ran lints on edited files (`game/environment.py`, `world/test_world.py`, `diffuse/ngen/loss.py`, `diffuse/ngen/train_ngen.py`) and **no linter errors were introduced**.
 
+---
+
+# Spatial Action Conditioning (2026-02-06)
+
+## Problem
+
+The model doesn't respect physics — bird floats up, ignores gravity, doesn't respond to flap input. The action conditioning is architecturally weak:
+
+1. **AdaGN is spatially uniform** — the same scale/shift is applied to every pixel. But "flap" means "apply upward velocity *to the bird specifically*." The model has to learn to route a global scalar signal through convolutional filters to produce a spatially localized effect. This is indirect and easy for the model to ignore in favor of visual extrapolation from context frames.
+
+2. **Target action buried in flattened vector** — All 17 actions are flattened into one vector: `[a_{t-16}, ..., a_{t-1}, a_t]` → `flatten` → `Linear(272, 128)`. The model has to learn that `a_t` (the last one) is the action that *causes* the target frame. There's no architectural hint that the target action is special.
+
+3. **Zero-initialized projection** — `self.proj` in ResBlock is zero-initialized (standard for diffusion), meaning action conditioning literally starts as a no-op and has to be learned from scratch.
+
+## Solution: Broadcast Target Action as Spatial Channels
+
+Keep time and aug in AdaGN where they belong (they're genuinely global signals), but give the target action a spatial pathway so the model can directly learn "flap → move bird region upward."
+
+### Changes to `diffuse/nn/resunet.py`
+
+1. **Separate target action from context actions**:
+   - Target action `a_t` (last action in sequence) gets its own embedding
+   - Context actions `a_{t-k}...a_{t-1}` can stay in AdaGN or be dropped
+
+2. **Project target action to spatial channels**:
+   - Embed target action → `(B, act_embed_dim)`
+   - Project to small channel count, e.g. `Linear(act_embed_dim, 16)` → `(B, 16)`
+   - Broadcast to `(B, 16, H, W)`
+
+3. **Concatenate at input level**:
+   - Current: `x = torch.cat([x, z_cond], dim=1)` → `(B, C*(k+1), H, W)`
+   - New: `x = torch.cat([x, z_cond, action_spatial], dim=1)` → `(B, C*(k+1)+16, H, W)`
+   - Update first DownResBlock's `fan_in` to account for extra 16 channels
+
+4. **Remove target action from context action flattening** (optional):
+   - Context actions stay in AdaGN: `[a_{t-k}, ..., a_{t-1}]` → `Linear(k * act_embed_dim, embed_dim)`
+   - Or drop context actions from AdaGN entirely since context frames already encode their effects
+
+### Changes to `diffuse/nn/resblock.py`
+
+If dropping context actions from AdaGN entirely:
+- Change `self.proj` from `Linear(embed_dim * 3, ...)` to `Linear(embed_dim * 2, ...)` (just time + aug)
+
+### Why This Works
+
+- The target action becomes a spatial feature map that goes through the entire conv pathway
+- The model can't easily ignore it — it's woven into feature activations from the first layer
+- Convolutions can learn to route "flap = 1" to "upward velocity in bird region" directly
+- Time and aug remain global (appropriate for their semantics)
+
+### Files to Modify
+
+| File | Change |
+|------|--------|
+| `diffuse/nn/resunet.py` | Split action embedding, broadcast target action spatially, concat at input |
+| `diffuse/nn/resblock.py` | Adjust projection size if dropping context actions from AdaGN |
+
