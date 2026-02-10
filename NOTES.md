@@ -228,8 +228,11 @@ It also doesn't respect gravity, but kind of respects actions - see videos
 
 
 
+my intuition tells me that the bird dynamics is described by a small part of latent space, so most the work the flow model does is in predicting background, pipes, etc.. need somehow to weight bird dynamics!
 
+maybe we should train the vae to actually compress more. right now we do (3, 512, 288) -> (4, 64, 36). should we consider e.g. compressing to (2, 32, 16)? i feel like hte game is simple enough that we can get away with that. and then our unet would have a bottleneck of (C, 4, 2). 
 
+my intuition is that this may encourage the model to better have a bird position embedded into the vae or something. 
 
 
 

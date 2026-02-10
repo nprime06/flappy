@@ -11,10 +11,16 @@ class ResUNet(nn.Module):  # context_size = k (number of context latent frames)
         self.aug_embedding = nn.Embedding(num_aug_bins, embed_dim)
         self.aug_act = nn.SiLU()
 
-        # target action spatial conditioning: embed -> project -> broadcast to (B, act_spatial_channels, H, W)
-        self.act_spatial_channels = act_embed_dim  # use act_embed_dim as spatial channel count
-        self.class_embedding = nn.Embedding(num_classes, act_embed_dim)
-        self.class_spatial_proj = nn.Linear(act_embed_dim, self.act_spatial_channels)
+        # spatial path: target action → embed → project → broadcast to (B, act_spatial_channels, H, W)
+        self.act_spatial_channels = act_embed_dim
+        self.class_embedding = nn.Embedding(num_classes, embed_dim)
+        self.class_spatial_proj = nn.Sequential(nn.SiLU(), nn.Linear(embed_dim, act_embed_dim))
+
+        # adagn path: all k+1 actions → embed → flatten → project to embed_dim
+        self.action_adagn_proj = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear((context_size + 1) * embed_dim, embed_dim),
+        )
 
         # down: in * (k+1) + act_spatial -> h, h -> 2h, ... 2**(num_layers - 2)h -> 2**(num_layers - 1)h
         first_in_channels = in_channels * (context_size + 1) + self.act_spatial_channels
@@ -48,11 +54,15 @@ class ResUNet(nn.Module):  # context_size = k (number of context latent frames)
         # c contains k+1 actions: [a_{t-k}, ..., a_{t-1}, a_t] where a_t causes the target
         B, C, H, W = x.shape
 
-        # extract target action (last in sequence) and broadcast spatially
+        # spatial path: target action → broadcast to (B, act_spatial_channels, H, W)
         target_action = c[:, -1]  # (B,)
-        action_emb = self.class_embedding(target_action)  # (B, act_embed_dim)
+        action_emb = self.class_embedding(target_action)  # (B, embed_dim)
         action_spatial = self.class_spatial_proj(action_emb)  # (B, act_spatial_channels)
         action_spatial = action_spatial.unsqueeze(-1).unsqueeze(-1).expand(B, -1, H, W)  # (B, act_spatial_channels, H, W)
+
+        # adagn path: all k+1 actions → embed → flatten → project to embed_dim
+        all_action_emb = self.class_embedding(c)  # (B, k+1, embed_dim)
+        c_emb = self.action_adagn_proj(all_action_emb.flatten(1))  # (B, embed_dim)
 
         # concat: noisy target + context frames + spatial action
         x = torch.cat([x, z_cond, action_spatial], dim=1)
@@ -62,9 +72,9 @@ class ResUNet(nn.Module):  # context_size = k (number of context latent frames)
 
         skip_connections = []
         for down_block in self.down_blocks:
-            x, skip = checkpoint(down_block, x, t_emb, aug_emb, use_reentrant=False)
+            x, skip = checkpoint(down_block, x, t_emb, aug_emb, c_emb, use_reentrant=False)
             skip_connections.append(skip)
-        x = checkpoint(self.bot, x, t_emb, aug_emb, use_reentrant=False)
+        x = checkpoint(self.bot, x, t_emb, aug_emb, c_emb, use_reentrant=False)
 
         # self-attention at bottleneck
         B_attn, C_attn, H_attn, W_attn = x.shape
@@ -75,7 +85,7 @@ class ResUNet(nn.Module):  # context_size = k (number of context latent frames)
         done_logit = self.done_head(x.detach())
 
         for up_block in self.up_blocks:
-            x = checkpoint(up_block, x, skip_connections.pop(), t_emb, aug_emb, use_reentrant=False)
+            x = checkpoint(up_block, x, skip_connections.pop(), t_emb, aug_emb, c_emb, use_reentrant=False)
         x = self.out_conv(x)
 
         return x, done_logit

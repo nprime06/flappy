@@ -19,7 +19,7 @@ class ResBlock(nn.Module): # expects time conditioning, need to change adaGN for
         self.conv1 = nn.Conv2d(fan_in, fan_out, kernel_size=3, padding=1)
         if embed_dim is not None:
             self.gn2 = nn.GroupNorm(get_groups(fan_out, groups), fan_out, affine=False) # adaGN time embed on second GN
-            self.proj = nn.Linear(embed_dim * 2, fan_out * 2)  # time + aug only (action is spatial now)
+            self.proj = nn.Linear(embed_dim * 3, fan_out * 2)  # time + action + aug
             nn.init.zeros_(self.proj.weight)
             nn.init.zeros_(self.proj.bias)
         else:
@@ -33,11 +33,11 @@ class ResBlock(nn.Module): # expects time conditioning, need to change adaGN for
         else:
             self.skip_conv = nn.Identity()
 
-    def forward(self, x, t_emb=None, aug_emb=None): # t_emb, aug_emb are (B, embed_dim)
+    def forward(self, x, t_emb=None, aug_emb=None, c_emb=None): # t_emb, aug_emb, c_emb are (B, embed_dim)
         res = self.skip_conv(x)
         x = self.gn2(self.conv1(self.act1(self.gn1(x))))
-        if t_emb is not None and aug_emb is not None:
-            emb = torch.cat([t_emb, aug_emb], dim=1) # (B, embed_dim * 2)
+        if t_emb is not None and aug_emb is not None and c_emb is not None:
+            emb = torch.cat([t_emb, c_emb, aug_emb], dim=1) # (B, embed_dim * 3)
             scale, shift = self.proj(emb).unsqueeze(-1).unsqueeze(-1).chunk(2, dim=1)
             x = x * (scale + 1) + shift
         x = self.conv2(self.act2(x))
@@ -51,8 +51,8 @@ class DownResBlock(nn.Module):
         self.res = ResBlock(fan_in, fan_out, embed_dim)
         self.down = nn.Conv2d(fan_out, fan_out, kernel_size=4, stride=2, padding=1)
 
-    def forward(self, x, t_emb=None, aug_emb=None, get_skip=True):
-        x = self.res(x, t_emb, aug_emb)
+    def forward(self, x, t_emb=None, aug_emb=None, c_emb=None, get_skip=True):
+        x = self.res(x, t_emb, aug_emb, c_emb)
         if get_skip: skip = x
         x = self.down(x)
         if get_skip: return x, skip
@@ -67,10 +67,10 @@ class UpResBlock(nn.Module):
         else:
             self.res = ResBlock(fan_out * 2, fan_out, embed_dim)
 
-    def forward(self, x, skip, t_emb=None, aug_emb=None):
+    def forward(self, x, skip, t_emb=None, aug_emb=None, c_emb=None):
         x = F.interpolate(x, scale_factor=2, mode='nearest')
         x = self.up(x)
         if skip is not None:
             x = torch.cat([x, skip], dim=1)
-        x = self.res(x, t_emb, aug_emb)
+        x = self.res(x, t_emb, aug_emb, c_emb)
         return x

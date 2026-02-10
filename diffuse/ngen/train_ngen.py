@@ -36,7 +36,7 @@ model_config = {
 
 train_config = {
     "lr": 1e-4,
-    "num_epochs": 1000,
+    "num_epochs": 200,
     "batch_size": 4096,
     "max_aug_std": 0.7,
     "checkpoint_interval": 50,
