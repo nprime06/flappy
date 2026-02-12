@@ -1,9 +1,8 @@
 import torch
 
 @torch.inference_mode()
-def euler_sample(model, z_0, z_cond, actions, aug_level, cfg_scale=1.5, num_steps=50, clamp_range=4.0, num_classes=2, residual=False):
+def euler_sample(model, z_0, z_cond, actions, aug_level, cfg_scale=1.5, num_steps=50, clamp_range=4.0, num_classes=2):
     B = z_0.shape[0]
-    C = z_0.shape[1]
     device = z_0.device
     dt = 1.0 / num_steps
 
@@ -19,9 +18,6 @@ def euler_sample(model, z_0, z_cond, actions, aug_level, cfg_scale=1.5, num_step
 
         z = z + v * dt
         z = torch.clamp(z, -clamp_range, clamp_range)
-
-    if residual: # model predicted frame delta, add back last context frame
-        z = z + z_cond[:, -C:]
     return z
 
 @torch.inference_mode()

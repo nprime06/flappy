@@ -167,16 +167,61 @@ def latent_to_image(vae, z, latent_mean, latent_std):
     return x
 
 
+def load_random_start_latent(latent_vod_dir, k, device):
+    """Load k context frames + current frame from a random position in a random episode."""
+    import json, random
+
+    # collect all valid runs
+    runs = []
+    for run_dir in Path(latent_vod_dir).glob("*/*/"):
+        latents_file = run_dir / "latents.pt"
+        info_file = run_dir / "run_info.jsonl"
+        if latents_file.exists() and info_file.exists():
+            runs.append(run_dir)
+
+    if not runs:
+        raise ValueError(f"No valid runs found in {latent_vod_dir}")
+
+    run_dir = random.choice(runs)
+    latents = torch.load(run_dir / "latents.pt", map_location=device, weights_only=True)
+    n_frames = latents.shape[0]
+
+    actions_dict = {}
+    with open(run_dir / "run_info.jsonl") as f:
+        for line in f:
+            rec = json.loads(line)
+            if "step" in rec:
+                actions_dict[rec["step"]] = rec["action"]
+
+    # pick a random valid starting position (need k context + 1 current)
+    start = random.randint(k, n_frames - 1)
+    past_latents = latents[start - k:start].unsqueeze(0).to(device)  # (1, k, C, H', W')
+    current_latent = latents[start].unsqueeze(0).to(device)  # (1, C, H', W')
+
+    # load k+1 actions: context actions + target action
+    action_list = [actions_dict.get(i, 0) for i in range(start - k, start + 1)]
+
+    print(f"Random start: run={run_dir.name}, frame={start}/{n_frames}")
+    print(f"  Actions loaded: {action_list}")
+    return past_latents, current_latent, action_list
+
+
 def main():
     parser = argparse.ArgumentParser(description="Play Flappy Bird through the world model")
     parser.add_argument("--ngen-checkpoint", type=str, required=True)
     parser.add_argument("--vae-checkpoint", type=str, required=True)
     parser.add_argument("--vod-dir", type=str, required=True)
+    parser.add_argument("--latent-vod", type=str, default=None)
+    parser.add_argument("--random-start", action="store_true", help="start from random VOD position (requires --latent-vod)")
     parser.add_argument("--num-steps", type=int, default=50)
     parser.add_argument("--done-threshold", type=float, default=0.5)
     parser.add_argument("--cfg-scale", type=float, default=1.5)
     parser.add_argument("--debug", action="store_true") # print debug info every frame
     args = parser.parse_args()
+
+    if args.random_start and not args.latent_vod:
+        print("Error: --random-start requires --latent-vod")
+        sys.exit(1)
 
     device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Using device: {device}")
@@ -208,20 +253,24 @@ def main():
     print(f"Latent normalization: mean={latent_mean:.4f}, std={latent_std:.4f}")
 
     # Load initial frames
-    print(f"Loading initial frames from {vod_dir}")
-    past_frames, current_frame = load_initial_frames(vod_dir, k, device)
-
-    # Encode initial frames
-    with torch.inference_mode():
-        B = 1
-        past_flat = past_frames.flatten(0, 1)  # (k, C, H, W)
-        z_cond = vae_encode(vae, past_flat, latent_mean, latent_std)  # (k, latent_ch, H', W')
-        z_cond = z_cond.unsqueeze(0).flatten(1, 2)  # (1, k*latent_ch, H', W')
-
-        z_current = vae_encode(vae, current_frame, latent_mean, latent_std)
-
-    # Get image dimensions from current frame
-    H, W = current_frame.shape[2], current_frame.shape[3]
+    if args.random_start:
+        print(f"Loading random start from latent VOD: {args.latent_vod}")
+        past_latents, z_current, init_actions = load_random_start_latent(args.latent_vod, k, device)
+        # past_latents: (1, k, C, H', W'), already in latent space
+        z_cond = past_latents.flatten(1, 2)  # (1, k*latent_ch, H', W')
+        # load a pixel frame just to get display dimensions
+        past_frames, _ = load_initial_frames(vod_dir, k, device)
+        H, W = past_frames.shape[3], past_frames.shape[4]
+    else:
+        init_actions = None
+        print(f"Loading initial frames from {vod_dir}")
+        past_frames, current_frame = load_initial_frames(vod_dir, k, device)
+        with torch.inference_mode():
+            past_flat = past_frames.flatten(0, 1)  # (k, C, H, W)
+            z_cond = vae_encode(vae, past_flat, latent_mean, latent_std)  # (k, latent_ch, H', W')
+            z_cond = z_cond.unsqueeze(0).flatten(1, 2)  # (1, k*latent_ch, H', W')
+            z_current = vae_encode(vae, current_frame, latent_mean, latent_std)
+        H, W = current_frame.shape[2], current_frame.shape[3]
 
     # Initialize pygame
     pygame.init()
@@ -235,9 +284,10 @@ def main():
                     for i in range(k)]
 
     # Action buffer: list of k past actions for conditioning
-    # Initialize with k no-flap actions (0)
-    # These represent actions[0] through actions[k-1] that caused frames[1] through frames[k]
-    action_buffer = [0] * k
+    if init_actions is not None:
+        action_buffer = init_actions[:k]  # first k actions from VOD (real context actions)
+    else:
+        action_buffer = [0] * k  # dummy actions when starting from pixel frames
 
     # Current latent (the frame we display)
     # Initially this is frame[k] from the VOD

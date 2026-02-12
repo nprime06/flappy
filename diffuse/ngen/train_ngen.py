@@ -38,7 +38,7 @@ train_config = {
     "lr": 1e-4,
     "num_epochs": 200,
     "batch_size": 4096,
-    "max_aug_std": 0.25,
+    "max_aug_std": 0.5,
     "checkpoint_interval": 50,
     "num_workers": 4,
 
@@ -46,7 +46,7 @@ train_config = {
     "cfg_dropout_prob": 0.1,
     "done_loss_weight": 0.1,    # weight for done head BCE loss
     "done_t_power": 4.0,        # emphasize done loss via normalized w(t)=t^4
-    "residual_prediction": True, # predict frame delta (z_target - z_last) instead of absolute z_target
+    "filter_target_action": 0, # set to 0 or 1 to only train on that target action (diagnostic)
     "runs_dir": "/home/willzhao/flappy/diffuse/ngen/runs",
     "device": "cuda" if torch.cuda.is_available() else "cpu",
 }
@@ -239,10 +239,15 @@ def train(latent_vod=None, run_dir=None, reflow_checkpoint=None):
             actions = actions.to(device, non_blocking=True)
             done_labels = done_labels.to(device, non_blocking=True)
 
+            if train_config["filter_target_action"] is not None:
+                mask = actions[:, -1] == train_config["filter_target_action"]
+                if mask.sum() == 0:
+                    continue
+                past_frames, current_frame = past_frames[mask], current_frame[mask]
+                actions, done_labels = actions[mask], done_labels[mask]
+
             B = past_frames.shape[0]
             z_target = current_frame
-            if train_config["residual_prediction"]:
-                z_target = z_target - past_frames[:, -1]  # predict frame delta from last context
             z_cond = past_frames.flatten(1, 2)
 
             aug_level = torch.randint(0, model_config["num_aug_bins"], (B,), device=device)
