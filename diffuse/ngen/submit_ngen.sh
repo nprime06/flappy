@@ -172,7 +172,7 @@ sbatch \
     --ntasks=1 \
     --cpus-per-task=$NUM_CPUS \
     --mem=${TOTAL_MEM}G \
-    --gres=gpu:h200:$NUM_GPUS \
+    -G h200:$NUM_GPUS \
     --time=$TIME \
     --output="${RUN_DIR}/slurm-%j.log" \
     --error="${RUN_DIR}/slurm-%j.err" \
