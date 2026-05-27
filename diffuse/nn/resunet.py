@@ -5,7 +5,7 @@ from .embedding import TimeEmbedding
 from .resblock import ResBlock, DownResBlock, UpResBlock
 
 class ResUNet(nn.Module):  # context_size = k (number of context latent frames)
-    def __init__(self, in_channels, hidden_channels, num_layers, embed_dim, act_embed_dim, num_classes, context_size, num_aug_bins):
+    def __init__(self, in_channels, hidden_channels, num_layers, embed_dim, act_embed_dim, num_classes, context_size, num_aug_bins, dynamics_dim=0):
         super().__init__()
         self.time_embedding = TimeEmbedding(embed_dim=embed_dim)  # already activated
         self.aug_embedding = nn.Embedding(num_aug_bins, embed_dim)
@@ -40,6 +40,15 @@ class ResUNet(nn.Module):  # context_size = k (number of context latent frames)
             nn.SiLU(),
             nn.Linear(64, 1),
         )
+        self.dynamics_dim = dynamics_dim
+        if dynamics_dim > 0:
+            self.dynamics_head = nn.Sequential(
+                nn.AdaptiveAvgPool2d(1),
+                nn.Flatten(),
+                nn.Linear(hidden_channels * 2**num_layers, 64),
+                nn.SiLU(),
+                nn.Linear(64, dynamics_dim),
+            )
 
         # up: 2**(num_layers)h -> 2**(num_layers - 1)h, ... 2h -> h
         up_blocks_list = []
@@ -83,9 +92,10 @@ class ResUNet(nn.Module):  # context_size = k (number of context latent frames)
         x = x + attn_out.permute(0, 2, 1).reshape(B_attn, C_attn, H_attn, W_attn)
 
         done_logit = self.done_head(x.detach())
+        dynamics_pred = self.dynamics_head(x) if self.dynamics_dim > 0 else None  # NOT detached
 
         for up_block in self.up_blocks:
             x = checkpoint(up_block, x, skip_connections.pop(), t_emb, aug_emb, c_emb, use_reentrant=False)
         x = self.out_conv(x)
 
-        return x, done_logit
+        return x, done_logit, dynamics_pred

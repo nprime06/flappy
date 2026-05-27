@@ -17,6 +17,7 @@ class LatentTraceDataset(Dataset):
 
         self.samples = []
         self.episode_actions = {}
+        self.episode_game_states = {}
         self._latent_cache = {}
 
         for run_dir in Path(latent_vod_dir).glob("*/*/"):
@@ -28,15 +29,19 @@ class LatentTraceDataset(Dataset):
 
             actions = {}
             terminated_flags = {}
+            game_states = {}
             with open(info_file) as f:
                 for line in f:
                     rec = json.loads(line)
                     if "step" in rec:
                         actions[rec["step"]] = rec["action"]
                         terminated_flags[rec["step"]] = rec.get("terminated", False)
+                        pobs = rec.get("processed_obs")
+                        game_states[rec["step"]] = pobs if pobs is not None else [0.0, 0.0, 0.0]
 
             run_key = str(run_dir)
             self.episode_actions[run_key] = actions
+            self.episode_game_states[run_key] = game_states
 
             latents = torch.load(latents_file, map_location="cpu", weights_only=True)
             n_frames = latents.shape[0]
@@ -65,7 +70,10 @@ class LatentTraceDataset(Dataset):
             actions.append(actions_dict.get(i, 0))
         actions = torch.tensor(actions, dtype=torch.long)  # (k+1,)
 
-        return past_latents, current_latent, actions, torch.tensor(done, dtype=torch.float)
+        game_state = self.episode_game_states[run_key].get(step, [0.0, 0.0, 0.0])
+        game_state = torch.tensor(game_state, dtype=torch.float)  # (3,): [dy, vel_y, dx]
+
+        return past_latents, current_latent, actions, torch.tensor(done, dtype=torch.float), game_state
 
 
 if __name__ == "__main__":
@@ -79,7 +87,7 @@ if __name__ == "__main__":
 
     if len(dataset) > 0:
         loader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=0)
-        past_latents, current_latent, actions, done = next(iter(loader))
+        past_latents, current_latent, actions, done, game_states = next(iter(loader))
         print(f"past latents shape: {past_latents.shape}")
         print(f"current latent shape: {current_latent.shape}")
         print(f"actions shape: {actions.shape}")

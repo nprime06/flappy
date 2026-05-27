@@ -82,29 +82,36 @@ def load_vae(checkpoint_path, device):
 
 
 def load_flow_model(checkpoint_path, device):
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    cfg = ckpt["model_config"]
-    model = ResUNet(
-        in_channels=cfg["in_channels"],
-        hidden_channels=cfg["hidden_channels"],
-        num_layers=cfg["num_layers"],
-        embed_dim=cfg["embed_dim"],
-        act_embed_dim=cfg["act_embed_dim"],
-        num_classes=cfg["num_classes"],
-        context_size=cfg["context_size"],
-        num_aug_bins=cfg["num_aug_bins"],
-    ).to(device)
-    state_dict = ckpt["model"]
-    
-    # handle compiled model checkpoints (_orig_mod prefix)
-    if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
-        state_dict = {key.replace("_orig_mod.", ""): value for key, value in state_dict.items()}
-    
-    model.load_state_dict(state_dict)
-    model.eval()
-    for p in model.parameters():
-        p.requires_grad = False
-    return model, cfg
+    try:
+        ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        cfg = ckpt["model_config"]
+        model = ResUNet(
+            in_channels=cfg["in_channels"],
+            hidden_channels=cfg["hidden_channels"],
+            num_layers=cfg["num_layers"],
+            embed_dim=cfg["embed_dim"],
+            act_embed_dim=cfg["act_embed_dim"],
+            num_classes=cfg["num_classes"],
+            context_size=cfg["context_size"],
+            num_aug_bins=cfg["num_aug_bins"],
+            dynamics_dim=cfg.get("dynamics_dim", 0),
+        ).to(device)
+        state_dict = ckpt["model"]
+        
+        # handle compiled model checkpoints (_orig_mod prefix)
+        if any(key.startswith("_orig_mod.") for key in state_dict.keys()):
+            state_dict = {key.replace("_orig_mod.", ""): value for key, value in state_dict.items()}
+        
+        model.load_state_dict(state_dict)
+        model.eval()
+        for p in model.parameters():
+            p.requires_grad = False
+        return model, cfg
+    except (KeyError, RuntimeError):
+        from diffuse.ngen.eval_playability import load_flow
+
+        model, cfg, _train_cfg = load_flow(Path(checkpoint_path), torch.device(device))
+        return model, cfg
 
 
 def load_initial_frames(vod_dir, k, device):
@@ -215,7 +222,16 @@ def main():
     parser.add_argument("--random-start", action="store_true", help="start from random VOD position (requires --latent-vod)")
     parser.add_argument("--num-steps", type=int, default=50)
     parser.add_argument("--done-threshold", type=float, default=0.5)
-    parser.add_argument("--cfg-scale", type=float, default=1.5)
+    parser.add_argument("--cfg-scale", type=float, default=1.0)
+    parser.add_argument(
+        "--z0-mode",
+        type=str,
+        default="zero",
+        choices=("zero", "random", "corr", "prev", "prev_noise"),
+        help="initial latent for each flow sample",
+    )
+    parser.add_argument("--prev-noise-scale", type=float, default=0.1)
+    parser.add_argument("--corr-rho", type=float, default=0.95)
     parser.add_argument("--debug", action="store_true") # print debug info every frame
     args = parser.parse_args()
 
@@ -312,12 +328,14 @@ def main():
     print("  SPACE - Flap")
     print("  D     - Toggle death mode (red tint preview)")
     print("  Q/ESC - Quit")
+    print(f"\nSampling: z0_mode={args.z0_mode}, cfg_scale={args.cfg_scale}, num_steps={args.num_steps}")
     print("\nStarting inference loop...")
 
     manual_death_mode = False  # For testing red tint
     # When the done head fires, we allow the model to generate N more frames, then freeze.
     # This lets the world model itself generate a single "game over" frame if it has learned it.
     stop_countdown: int | None = None
+    noise_state = None
 
     while running:
         # ============================================================================
@@ -398,7 +416,23 @@ def main():
 
         # Sample next frame using flow model
         with torch.inference_mode():
-            z_0 = torch.randn_like(z_display)
+            if args.z0_mode == "zero":
+                z_0 = torch.zeros_like(z_display)
+            elif args.z0_mode == "random":
+                z_0 = torch.randn_like(z_display)
+            elif args.z0_mode == "corr":
+                eps = torch.randn_like(z_display)
+                if noise_state is None:
+                    noise_state = eps
+                else:
+                    noise_state = args.corr_rho * noise_state + (1.0 - args.corr_rho ** 2) ** 0.5 * eps
+                z_0 = noise_state
+            elif args.z0_mode == "prev":
+                z_0 = z_display.clone()
+            elif args.z0_mode == "prev_noise":
+                z_0 = z_display + args.prev_noise_scale * torch.randn_like(z_display)
+            else:
+                raise ValueError(f"unknown z0 mode: {args.z0_mode}")
             ngen_start = time.perf_counter()
             z_next = euler_sample(
                     flow_model, z_0, z_cond, actions, aug_level,
@@ -407,7 +441,7 @@ def main():
 
             # Check done prediction (model always returns done_logit)
             t_final = torch.ones(1, device=device)
-            _, done_logit = flow_model(z_next, t_final, z_cond=z_cond, c=actions, aug_level=aug_level)
+            _, done_logit, *_ = flow_model(z_next, t_final, z_cond=z_cond, c=actions, aug_level=aug_level)
             done_prob = torch.sigmoid(done_logit).item()
             ngen_elapsed = time.perf_counter() - ngen_start
             

@@ -12,8 +12,8 @@ def euler_sample(model, z_0, z_cond, actions, aug_level, cfg_scale=1.5, num_step
     for i in range(num_steps):
         t = torch.full((B,), (i + 0.5) * dt, device=device) # midpoint
 
-        v_cond, _ = model(z, t, z_cond=z_cond, c=actions, aug_level=aug_level)
-        v_uncond, _ = model(z, t, z_cond=z_cond_null, c=actions, aug_level=aug_level)
+        v_cond, *_ = model(z, t, z_cond=z_cond, c=actions, aug_level=aug_level)
+        v_uncond, *_ = model(z, t, z_cond=z_cond_null, c=actions, aug_level=aug_level)
         v = v_uncond + cfg_scale * (v_cond - v_uncond)
 
         z = z + v * dt
@@ -32,8 +32,8 @@ def euler_sample_backward(model, z_1, z_cond, actions, aug_level, cfg_scale=1.5,
     for i in range(num_steps):
         t = torch.full((B,), 1.0 - (i + 0.5) * dt, device=device) # midpoint
 
-        v_cond, _ = model(z, t, z_cond=z_cond, c=actions, aug_level=aug_level)
-        v_uncond, _ = model(z, t, z_cond=z_cond_null, c=actions, aug_level=aug_level)
+        v_cond, *_ = model(z, t, z_cond=z_cond, c=actions, aug_level=aug_level)
+        v_uncond, *_ = model(z, t, z_cond=z_cond_null, c=actions, aug_level=aug_level)
         v = v_uncond + cfg_scale * (v_cond - v_uncond)
 
         z = z - v * dt
