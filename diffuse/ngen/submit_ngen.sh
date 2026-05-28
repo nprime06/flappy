@@ -4,6 +4,7 @@
 # USAGE:
 #   ./submit_ngen.sh --latent-vod /path/to/dir
 #   ./submit_ngen.sh --latent-vod /path/to/dir --tag k8-dyn03 --context-size 8 --dynamics-loss-weight 0.3
+#   ./submit_ngen.sh --latent-vod /path/to/dir --cfg-dropout-mode action --num-classes 3
 #   ./submit_ngen.sh --latent-vod /path/to/dir --gpus 2
 #   ./submit_ngen.sh --latent-vod /path/to/dir --run-dir /path/to/run    # resume existing run (use full absolute path)
 #   ./submit_ngen.sh --latent-vod /path/to/dir --reflow /path/to/ckpt    # reflow
@@ -68,6 +69,10 @@ while [[ $# -gt 0 ]]; do
             EXTRA_TRAIN_ARGS="$EXTRA_TRAIN_ARGS --act-embed-dim $2"
             shift 2
             ;;
+        --num-classes)
+            EXTRA_TRAIN_ARGS="$EXTRA_TRAIN_ARGS --num-classes $2"
+            shift 2
+            ;;
         --num-aug-bins)
             EXTRA_TRAIN_ARGS="$EXTRA_TRAIN_ARGS --num-aug-bins $2"
             shift 2
@@ -94,6 +99,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --cfg-dropout-prob)
             EXTRA_TRAIN_ARGS="$EXTRA_TRAIN_ARGS --cfg-dropout-prob $2"
+            shift 2
+            ;;
+        --cfg-dropout-mode)
+            EXTRA_TRAIN_ARGS="$EXTRA_TRAIN_ARGS --cfg-dropout-mode $2"
+            shift 2
+            ;;
+        --cfg-null-action)
+            EXTRA_TRAIN_ARGS="$EXTRA_TRAIN_ARGS --cfg-null-action $2"
             shift 2
             ;;
         --done-loss-weight)

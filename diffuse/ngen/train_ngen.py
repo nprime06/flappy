@@ -29,7 +29,7 @@ model_config = {
     "num_layers": 2,
     "embed_dim": 128,
     "act_embed_dim": 16,
-    "num_classes": 2,
+    "num_classes": 3,
     "context_size": 8,
     "num_aug_bins": 10,
     "dynamics_dim": 3, # auxiliary dynamics head: predict [dy, vel_y, dx] from bottleneck
@@ -45,6 +45,8 @@ train_config = {
 
     "reflow_steps": 50,
     "cfg_dropout_prob": 0.1,
+    "cfg_dropout_mode": "action",
+    "cfg_null_action": None,
     "done_loss_weight": 0.1,    # weight for done head BCE loss
     "done_t_power": 4.0,        # emphasize done loss via normalized w(t)=t^4
     "filter_target_action": None, # set to 0 or 1 to only train on that target action (diagnostic)
@@ -69,6 +71,11 @@ def _apply_cli_overrides(args):
     if saved_config is not None:
         model_config.update(saved_config.get("model_config", {}))
         train_config.update(saved_config.get("train_config", {}))
+        # Older runs used context-frame dropout and binary actions. Preserve that
+        # behavior when resuming configs that predate action-only CFG.
+        if "cfg_dropout_mode" not in saved_config.get("train_config", {}):
+            train_config["cfg_dropout_mode"] = "frame"
+            train_config["cfg_null_action"] = None
         if args.reflow is None:
             args.reflow = saved_config.get("reflow_checkpoint")
         if args.latent_vod is None:
@@ -79,6 +86,7 @@ def _apply_cli_overrides(args):
         "num_layers": args.num_layers,
         "embed_dim": args.embed_dim,
         "act_embed_dim": args.act_embed_dim,
+        "num_classes": args.num_classes,
         "context_size": args.context_size,
         "num_aug_bins": args.num_aug_bins,
         "dynamics_dim": args.dynamics_dim,
@@ -96,6 +104,8 @@ def _apply_cli_overrides(args):
         "num_workers": args.num_workers,
         "reflow_steps": args.reflow_steps,
         "cfg_dropout_prob": args.cfg_dropout_prob,
+        "cfg_dropout_mode": args.cfg_dropout_mode,
+        "cfg_null_action": args.cfg_null_action,
         "done_loss_weight": args.done_loss_weight,
         "done_t_power": args.done_t_power,
         "dynamics_loss_weight": args.dynamics_loss_weight,
@@ -106,6 +116,27 @@ def _apply_cli_overrides(args):
 
     if args.filter_target_action is not None:
         train_config["filter_target_action"] = None if args.filter_target_action == "none" else int(args.filter_target_action)
+
+
+def _resolve_cfg_config():
+    mode = train_config.get("cfg_dropout_mode", "frame")
+    if mode not in {"none", "frame", "action"}:
+        raise ValueError(f"unknown cfg_dropout_mode: {mode}")
+    if train_config.get("cfg_dropout_prob", 0.0) <= 0:
+        mode = "none"
+        train_config["cfg_dropout_mode"] = mode
+    if mode == "action":
+        if model_config["num_classes"] < 3:
+            raise ValueError("action CFG dropout requires --num-classes >= 3 for a null action token")
+        if train_config.get("cfg_null_action") is None:
+            train_config["cfg_null_action"] = model_config["num_classes"] - 1
+        null_action = int(train_config["cfg_null_action"])
+        if null_action < 2 or null_action >= model_config["num_classes"]:
+            raise ValueError(
+                f"cfg_null_action={null_action} must be a non-game action id in [2, {model_config['num_classes'] - 1}]"
+            )
+    else:
+        train_config["cfg_null_action"] = None
 
 
 def load_flow_model(checkpoint_path, device): # load reflow model (no ddp, inference only)
@@ -145,6 +176,7 @@ def setup_ddp():
 def train(latent_vod=None, run_dir=None, reflow_checkpoint=None, run_tag=None):
     rank, local_rank, world_size, device = setup_ddp()
     is_main = rank == 0
+    _resolve_cfg_config()
 
     reflow_generator = None
     if reflow_checkpoint is not None:
@@ -155,7 +187,9 @@ def train(latent_vod=None, run_dir=None, reflow_checkpoint=None, run_tag=None):
             reflow_model, 
             num_steps=train_config["reflow_steps"],
             cfg_scale=1.5,  # Use CFG during reflow backward integration
-            num_classes=model_config["num_classes"]
+            num_classes=model_config["num_classes"],
+            cfg_mode="auto",
+            null_action_id=train_config["cfg_null_action"],
         )
         if is_main:
             print("reflow mode enabled: using pre-trained model to generate (z_0, z_1) pairs")
@@ -304,6 +338,7 @@ def train(latent_vod=None, run_dir=None, reflow_checkpoint=None, run_tag=None):
             B = past_frames.shape[0]
             z_target = current_frame
             z_cond = past_frames.flatten(1, 2)
+            model_actions = actions
 
             aug_level = torch.randint(0, model_config["num_aug_bins"], (B,), device=device)
             aug_std = aug_level.float() / model_config["num_aug_bins"] * train_config["max_aug_std"]
@@ -311,20 +346,25 @@ def train(latent_vod=None, run_dir=None, reflow_checkpoint=None, run_tag=None):
 
             if train_config["cfg_dropout_prob"] > 0:
                 cfg_mask = torch.rand(B, device=device) < train_config["cfg_dropout_prob"]
-                z_cond = torch.where(cfg_mask.view(B, 1, 1, 1), torch.zeros_like(z_cond), z_cond) # gamengen: only drop frames not actions
+                if train_config["cfg_dropout_mode"] == "frame":
+                    z_cond = torch.where(cfg_mask.view(B, 1, 1, 1), torch.zeros_like(z_cond), z_cond)
+                elif train_config["cfg_dropout_mode"] == "action":
+                    null_actions = torch.full_like(actions, int(train_config["cfg_null_action"]))
+                    model_actions = torch.where(cfg_mask.view(B, 1), null_actions, actions)
 
             if reflow_generator is not None:
-                z_0 = reflow_generator.generate(z_target, z_cond, actions, aug_level)
+                z_0 = reflow_generator.generate(z_target, z_cond, model_actions, aug_level)
             else:
                 z_0 = None  # sample from N(0,1) in loss function
 
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 loss, flow_loss, done_loss, dynamics_loss = flow_matching_loss(
-                    model, z_target, z_cond, actions, aug_level, z_0=z_0,
+                    model, z_target, z_cond, model_actions, aug_level, z_0=z_0,
                     done_labels=done_labels, done_loss_weight=train_config["done_loss_weight"],
                     action_weight=train_config["action_weight"], done_pos_weight=train_config["done_pos_weight"],
                     done_t_power=train_config["done_t_power"],
                     game_states=game_states, dynamics_loss_weight=train_config["dynamics_loss_weight"],
+                    loss_actions=actions,
                 )
 
             optimizer.zero_grad()
@@ -400,6 +440,7 @@ if __name__ == "__main__":
     parser.add_argument("--num-layers", type=int, default=None)
     parser.add_argument("--embed-dim", type=int, default=None)
     parser.add_argument("--act-embed-dim", type=int, default=None)
+    parser.add_argument("--num-classes", type=int, default=None)
     parser.add_argument("--context-size", type=int, default=None)
     parser.add_argument("--num-aug-bins", type=int, default=None)
     parser.add_argument("--dynamics-dim", type=int, default=None)
@@ -411,6 +452,8 @@ if __name__ == "__main__":
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--reflow-steps", type=int, default=None)
     parser.add_argument("--cfg-dropout-prob", type=float, default=None)
+    parser.add_argument("--cfg-dropout-mode", choices=["none", "frame", "action"], default=None)
+    parser.add_argument("--cfg-null-action", type=int, default=None)
     parser.add_argument("--done-loss-weight", type=float, default=None)
     parser.add_argument("--done-t-power", type=float, default=None)
     parser.add_argument("--dynamics-loss-weight", type=float, default=None)

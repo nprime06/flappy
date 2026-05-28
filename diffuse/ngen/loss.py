@@ -6,7 +6,8 @@ def flow_matching_loss(model, z_target, z_cond, actions, aug_level, z_0=None,
                        done_labels=None, done_loss_weight=0.1,
                        action_weight=1.0, null_action_weight=1.0, done_pos_weight=1.0,
                        done_t_power=0.0,
-                       game_states=None, dynamics_loss_weight=0.0):
+                       game_states=None, dynamics_loss_weight=0.0,
+                       loss_actions=None):
     # action_weight: for action=1 samples to fix class imbalance
     # done_pos_weight: for done=1 samples to fix class imbalance (in done BCE loss)
     # done_t_power: reweight done loss by normalized w(t) propto t^alpha
@@ -22,7 +23,8 @@ def flow_matching_loss(model, z_target, z_cond, actions, aug_level, z_0=None,
     v_pred, done_logit, dynamics_pred = model(z_t, t, z_cond=z_cond, c=actions, aug_level=aug_level)
     mse_per_sample = ((v_pred - v_target) ** 2).mean(dim=[1, 2, 3])  # (B,)
 
-    target_action = actions[:, -1]  # (B,), target action
+    weight_actions = actions if loss_actions is None else loss_actions
+    target_action = weight_actions[:, -1]  # (B,), true target action
     weights = torch.where(target_action == 1, action_weight, 1.0)
     weights = weights.to(dtype=mse_per_sample.dtype) # weighted mean for stable per-batch magnitude
     flow_loss = (mse_per_sample * weights).sum() / weights.sum().clamp_min(1e-12)
